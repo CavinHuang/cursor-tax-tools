@@ -81,8 +81,8 @@ If needed, you can further use the `web_scraper.py` file to scrape the web page 
 ## 依赖包
 - aiohttp: 异步HTTP客户端
 - python-Levenshtein: 用于计算编辑距离
-- jellyfish: 用于音标匹配
 - beautifulsoup4: 用于HTML解析
+- requests: 用于HTTP请求
 - tkinter: GUI界面（Python标准库）
 
 ## 优化要点
@@ -192,3 +192,9 @@ If needed, you can further use the `web_scraper.py` file to scrape the web page 
 - 双击税率复制到剪贴板
 - 显示复制成功提示
 - 支持键盘操作
+
+## 官网搜索功能
+- 输入编码直接搜索
+- 使用官方搜索URL
+- 在浏览器中打开结果
+- 保持简单的界面设计

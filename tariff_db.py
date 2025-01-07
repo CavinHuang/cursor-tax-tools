@@ -30,6 +30,14 @@ class TariffDB:
                     url TEXT
                 )
                 """)
+                # 添加错误记录表
+                self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS scrape_errors (
+                    code TEXT PRIMARY KEY,
+                    error_message TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """)
                 # 添加索引
                 self.conn.execute("CREATE INDEX IF NOT EXISTS idx_code ON tariffs(code)")
         except Exception as e:
@@ -95,3 +103,71 @@ class TariffDB:
         except Exception as e:
             logger.error(f"获取记录数失败: {str(e)}")
             raise
+
+    def add_tariffs_batch(self, tariffs: List[Dict]):
+        """批量添加关税记录"""
+        try:
+            with self.conn:
+                self.conn.executemany(
+                    "INSERT OR REPLACE INTO tariffs (code, description, rate, url) VALUES (?, ?, ?, ?)",
+                    [(t['code'], t['description'], t['rate'], t.get('url')) for t in tariffs]
+                )
+        except Exception as e:
+            logger.error(f"批量添加记录失败: {str(e)}")
+            raise
+
+    def save_to_db(self, tariffs: List[Dict]):
+        """保存到数据库"""
+        from tariff_db import TariffDB
+        db = TariffDB()
+        try:
+            db.add_tariffs_batch(tariffs)
+            logger.info(f"成功保存 {len(tariffs)} 条记录")
+        except Exception as e:
+            logger.error(f"保存记录失败: {str(e)}")
+
+    def get_existing_codes(self) -> set:
+        """获取已存在的所有商品编码"""
+        try:
+            cur = self.conn.execute("SELECT code FROM tariffs")
+            return set(row[0] for row in cur.fetchall())
+        except Exception as e:
+            logger.error(f"获取已存在编码失败: {str(e)}")
+            return set()
+
+    def add_scrape_error(self, code: str, error_message: str):
+        """记录抓取错误"""
+        try:
+            with self.conn:
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO scrape_errors (code, error_message) VALUES (?, ?)",
+                    (code, error_message)
+                )
+        except Exception as e:
+            logger.error(f"记录抓取错误失败: {str(e)}")
+
+    def get_scrape_errors(self) -> List[Dict]:
+        """获取所有抓取错误记录"""
+        try:
+            cur = self.conn.execute(
+                "SELECT code, error_message, timestamp FROM scrape_errors"
+            )
+            return [
+                {
+                    'code': row[0],
+                    'error_message': row[1],
+                    'timestamp': row[2]
+                }
+                for row in cur.fetchall()
+            ]
+        except Exception as e:
+            logger.error(f"获取抓取错误记录失败: {str(e)}")
+            return []
+
+    def clear_scrape_error(self, code: str):
+        """清除指定编码的抓取错误记录"""
+        try:
+            with self.conn:
+                self.conn.execute("DELETE FROM scrape_errors WHERE code = ?", (code,))
+        except Exception as e:
+            logger.error(f"清除抓取错误记录失败: {str(e)}")
