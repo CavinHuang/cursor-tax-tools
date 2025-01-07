@@ -1,0 +1,10 @@
+# Web scraping
+aiohttp>=3.8.1
+beautifulsoup4==4.12.2
+
+# Fuzzy search
+python-Levenshtein==0.21.1
+jellyfish==1.0.1
+
+# Testing
+unittest2>=1.1.0
