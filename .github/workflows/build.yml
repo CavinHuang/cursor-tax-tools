@@ -115,7 +115,7 @@ jobs:
         # 创建ZIP文件
         echo "Creating ZIP file..."
         cd release
-        7z a -tzip "../$env:APP_NAME-${{ github.ref_name }}.zip" *
+        7z a -tzip "../英国海关编码税率查询工具-${{ github.ref_name }}.zip" *
         if ($LASTEXITCODE -ne 0) {
             echo "Error creating ZIP file"
             exit $LASTEXITCODE
@@ -124,22 +124,22 @@ jobs:
         # 复制EXE文件
         cd ..
         echo "Copying EXE file..."
-        Copy-Item "dist/$env:APP_NAME.exe" "$env:APP_NAME-${{ github.ref_name }}.exe"
+        Copy-Item "dist/$env:APP_NAME.exe" "英国海关编码税率查询工具-${{ github.ref_name }}.exe"
         if ($LASTEXITCODE -ne 0) {
             echo "Error copying EXE file"
             exit $LASTEXITCODE
         }
 
         echo "Release files created successfully"
-        Get-ChildItem "$env:APP_NAME-${{ github.ref_name }}.*"
+        Get-ChildItem "英国海关编码税率查询工具-${{ github.ref_name }}.*"
 
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          ${{ env.APP_NAME }}-${{ github.ref_name }}.zip
-          ${{ env.APP_NAME }}-${{ github.ref_name }}.exe
+          英国海关编码税率查询工具-${{ github.ref_name }}.zip
+          英国海关编码税率查询工具-${{ github.ref_name }}.exe
         name: Release ${{ github.ref_name }}
         draft: false
         prerelease: false
