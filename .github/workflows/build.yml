@@ -10,6 +10,9 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: 1
 
     steps:
     - uses: actions/checkout@v3
@@ -38,21 +41,31 @@ jobs:
         pip install jellyfish==1.0.1 unittest2>=1.1.0
 
     - name: Create template and icon
+      shell: pwsh
       run: |
         # 确保目录存在
         mkdir templates -ErrorAction SilentlyContinue
+        # 设置编码
+        $env:PYTHONIOENCODING = "utf-8"
         # 创建模板和图标
         python create_template.py
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         python create_icon.py
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     - name: Build with PyInstaller
+      shell: pwsh
       run: |
         # 修改spec文件中的name
-        (Get-Content build_win.spec) -replace "name='关税查询工具'", "name='英国海关编码税率查询工具'" | Set-Content build_win.spec
+        $content = Get-Content build_win.spec -Raw
+        $content = $content -replace "name='关税查询工具'", "name='英国海关编码税率查询工具'"
+        [System.IO.File]::WriteAllText("build_win.spec", $content, [System.Text.Encoding]::UTF8)
+        # 运行PyInstaller
         pyinstaller build_win.spec
 
     - name: Create release ZIP
       if: startsWith(github.ref, 'refs/tags/')
+      shell: pwsh
       run: |
         cd dist
         7z a -tzip "../英国海关编码税率查询工具-${{ github.ref_name }}.zip" "英国海关编码税率查询工具"
