@@ -118,11 +118,11 @@ jobs:
 
     - name: Build with PyInstaller
       run: |
-        # 修改spec文件中的name
-        sed -i '' "s/name='英国海关编码税率查询工具'/name='$APP_NAME'/" build_win.spec
+        # 使用独立的spec文件
+        sed -i '' "s/name='英国海关编码税率查询工具'/name='$APP_NAME'/" build_mac.spec
 
         # 运行PyInstaller
-        pyinstaller build_win.spec
+        pyinstaller build_mac.spec
 
         # 检查构建结果
         if [ ! -d "dist/${APP_NAME}.app" ]; then
