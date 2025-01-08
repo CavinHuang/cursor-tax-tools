@@ -17,7 +17,7 @@ jobs:
     env:
       PYTHONIOENCODING: utf-8
       PYTHONUTF8: 1
-      APP_NAME: 英国海关编码税率查询工具
+      APP_NAME: uk-tax-tools
 
     steps:
     - uses: actions/checkout@v3
@@ -63,7 +63,7 @@ jobs:
       run: |
         # 修改spec文件中的name
         $content = Get-Content build_win.spec -Raw
-        $content = $content -replace "name='关税查询工具'", "name='$env:APP_NAME'"
+        $content = $content -replace "name='英国海关编码税率查询工具'", "name='$env:APP_NAME'"
         [System.IO.File]::WriteAllText("build_win.spec", $content, [System.Text.Encoding]::UTF8)
         # 运行PyInstaller
         pyinstaller build_win.spec
@@ -134,32 +134,28 @@ jobs:
             exit $LASTEXITCODE
         }
 
-        # 重命名为中文名称
-        Rename-Item "$zipName" "英国海关编码税率查询工具-$version.zip"
-        Rename-Item "$exeName" "英国海关编码税率查询工具-$version.exe"
-
         # 显示文件列表
         echo "Created files:"
-        Get-ChildItem "英国海关编码税率查询工具-$version.*"
+        Get-ChildItem "uk-tax-tools-$version.*"
 
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
         body: |
-          ## 英国海关编码税率查询工具 ${{ github.ref_name }}
+          ## UK Tax Tools ${{ github.ref_name }}
 
-          ### 下载
-          - [完整版（推荐）](英国海关编码税率查询工具-${{ github.ref_name }}.zip)
-          - [单文件版](英国海关编码税率查询工具-${{ github.ref_name }}.exe)
+          ### Downloads
+          - [Full Version (Recommended)](uk-tax-tools-${{ github.ref_name }}.zip)
+          - [Single File Version](uk-tax-tools-${{ github.ref_name }}.exe)
 
-          ### 说明
-          - 完整版包含所有必要的文件，解压后即可使用
-          - 单文件版仅包含主程序，首次运行时会自动创建所需文件
+          ### Notes
+          - Full version includes all necessary files
+          - Single file version will create required files on first run
         files: |
-          英国海关编码税率查询工具-${{ github.ref_name }}.zip
-          英国海关编码税率查询工具-${{ github.ref_name }}.exe
-        name: 英国海关编码税率查询工具 ${{ github.ref_name }}
+          uk-tax-tools-${{ github.ref_name }}.zip
+          uk-tax-tools-${{ github.ref_name }}.exe
+        name: UK Tax Tools ${{ github.ref_name }}
         draft: false
         prerelease: false
       env:
