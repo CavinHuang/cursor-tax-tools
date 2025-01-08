@@ -37,6 +37,12 @@ class BatchProcessFrame(ttk.Frame):
             text="开始处理",
             command=self.start_processing
         )
+        # 添加下载模板按钮
+        self.template_btn = ttk.Button(
+            self.file_frame,
+            text="下载模板",
+            command=self.download_template
+        )
 
         # 进度显示部分
         self.progress_frame = ttk.LabelFrame(self, text="处理进度")
@@ -108,6 +114,7 @@ class BatchProcessFrame(ttk.Frame):
         self.file_entry.pack(side=tk.LEFT, padx=5, pady=5)
         self.browse_btn.pack(side=tk.LEFT, padx=5, pady=5)
         self.process_btn.pack(side=tk.LEFT, padx=5, pady=5)
+        self.template_btn.pack(side=tk.LEFT, padx=5, pady=5)
 
         # 进度显示布局
         self.progress_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -254,3 +261,25 @@ class BatchProcessFrame(ttk.Frame):
         except Exception as e:
             messagebox.showerror("错误", f"下载文件失败: {str(e)}")
             logger.error(f"下载文件失败: {str(e)}")
+
+    def download_template(self):
+        """下载Excel模板文件"""
+        template_path = "templates/batch_rate_template.xlsx"
+        if not os.path.exists(template_path):
+            messagebox.showerror("错误", "模板文件不存在")
+            return
+
+        try:
+            # 打开文件保存对话框
+            save_path = filedialog.asksaveasfilename(
+                defaultextension=".xlsx",
+                filetypes=[("Excel files", "*.xlsx")],
+                initialfile="batch_rate_template.xlsx"
+            )
+            if save_path:
+                import shutil
+                shutil.copy2(template_path, save_path)
+                messagebox.showinfo("成功", f"模板已保存到: {save_path}")
+        except Exception as e:
+            messagebox.showerror("错误", f"下载模板失败: {str(e)}")
+            logger.error(f"下载模板失败: {str(e)}")
