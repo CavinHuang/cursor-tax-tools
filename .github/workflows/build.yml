@@ -66,7 +66,7 @@ jobs:
         $content = $content -replace "name='英国海关编码税率查询工具'", "name='$env:APP_NAME'"
         [System.IO.File]::WriteAllText("build_win.spec", $content, [System.Text.Encoding]::UTF8)
         # 运行PyInstaller
-        pyinstaller --onefile build_win.spec
+        pyinstaller build_win.spec
         # 检查构建结果
         if (-not (Test-Path "dist/$env:APP_NAME.exe")) {
             echo "Error: Executable not found"

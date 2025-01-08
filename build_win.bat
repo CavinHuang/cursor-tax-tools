@@ -1,0 +1,1 @@
+pyinstaller --onefile --noconsole ./tariff_gui.py --name "uk-tax-tools"

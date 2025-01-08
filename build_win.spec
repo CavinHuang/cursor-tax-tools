@@ -3,19 +3,11 @@
 block_cipher = None
 
 a = Analysis(
-    ['tariff_gui.py'],
+    ['tariff_gui.py'],  # 你的主程序文件
     pathex=[],
     binaries=[],
-    datas=[
-        ('templates/batch_rate_template.xlsx', 'templates'),  # 包含模板文件
-        ('tariffs.db', '.'),  # 包含数据库文件
-    ],
-    hiddenimports=[
-        'pandas',
-        'numpy',
-        'openpyxl',
-        'python-Levenshtein',
-    ],
+    datas=[('templates', 'templates'), ('tariffs.db', '.')],  # 添加需要的资源文件
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -35,17 +27,16 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='英国海关编码税率查询工具',
+    name='uk-tax-tools',  # 应用程序名称
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,
+    console=False,  # 如果是GUI应用，设置为False
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='app.ico',  # 应用图标
 )
