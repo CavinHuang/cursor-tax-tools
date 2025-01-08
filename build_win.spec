@@ -35,7 +35,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='关税查询工具',
+    name='英国海关编码税率查询工具',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
