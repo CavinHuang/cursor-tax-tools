@@ -115,7 +115,9 @@ jobs:
         # 创建ZIP文件
         echo "Creating ZIP file..."
         cd release
-        7z a -tzip "../英国海关编码税率查询工具-${{ github.ref_name }}.zip" *
+        $zipName = "英国海关编码税率查询工具-${{ github.ref_name }}.zip"
+        echo "Creating zip file: $zipName"
+        7z a -tzip "../$zipName" *
         if ($LASTEXITCODE -ne 0) {
             echo "Error creating ZIP file"
             exit $LASTEXITCODE
@@ -123,24 +125,36 @@ jobs:
 
         # 复制EXE文件
         cd ..
-        echo "Copying EXE file..."
-        Copy-Item "dist/$env:APP_NAME.exe" "英国海关编码税率查询工具-${{ github.ref_name }}.exe"
+        $exeName = "英国海关编码税率查询工具-${{ github.ref_name }}.exe"
+        echo "Creating exe file: $exeName"
+        Copy-Item "dist/$env:APP_NAME.exe" "$exeName"
         if ($LASTEXITCODE -ne 0) {
             echo "Error copying EXE file"
             exit $LASTEXITCODE
         }
 
-        echo "Release files created successfully"
+        # 显示文件列表
+        echo "Created files:"
         Get-ChildItem "英国海关编码税率查询工具-${{ github.ref_name }}.*"
 
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
+        body: |
+          ## 英国海关编码税率查询工具 ${{ github.ref_name }}
+
+          ### 下载
+          - [完整版（推荐）](英国海关编码税率查询工具-${{ github.ref_name }}.zip)
+          - [单文件版](英国海关编码税率查询工具-${{ github.ref_name }}.exe)
+
+          ### 说明
+          - 完整版包含所有必要的文件，解压后即可使用
+          - 单文件版仅包含主程序，首次运行时会自动创建所需文件
         files: |
           英国海关编码税率查询工具-${{ github.ref_name }}.zip
           英国海关编码税率查询工具-${{ github.ref_name }}.exe
-        name: Release ${{ github.ref_name }}
+        name: 英国海关编码税率查询工具 ${{ github.ref_name }}
         draft: false
         prerelease: false
       env:
