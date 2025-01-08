@@ -64,14 +64,9 @@ jobs:
         pyinstaller build_win.spec
 
         # 检查构建结果
-        if (-not (Test-Path "dist/$env:APP_NAME")) {
-            echo "Error: Build directory not found"
-            Get-ChildItem dist
-            exit 1
-        }
-        if (-not (Test-Path "dist/$env:APP_NAME/$env:APP_NAME.exe")) {
+        if (-not (Test-Path "dist/$env:APP_NAME.exe")) {
             echo "Error: Executable not found"
-            Get-ChildItem "dist/$env:APP_NAME"
+            Get-ChildItem dist
             exit 1
         }
 
@@ -80,7 +75,7 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         name: build-artifact
-        path: dist/${{ env.APP_NAME }}
+        path: dist/${{ env.APP_NAME }}.exe
         retention-days: 5
 
     - name: Check Build Type
@@ -99,17 +94,23 @@ jobs:
       run: |
         echo "Creating release files for tag: $env:GITHUB_REF"
 
-        # 检查目录和文件
-        if (-not (Test-Path "dist/$env:APP_NAME")) {
-            echo "Error: Build directory not found"
+        # 检查文件
+        if (-not (Test-Path "dist/$env:APP_NAME.exe")) {
+            echo "Error: Executable not found"
             Get-ChildItem dist
             exit 1
         }
 
+        # 创建发布目录
+        mkdir release -ErrorAction SilentlyContinue
+        Copy-Item "dist/$env:APP_NAME.exe" "release/"
+        Copy-Item "templates" "release/" -Recurse
+        Copy-Item "tariffs.db" "release/"
+
         # 创建ZIP文件
-        cd dist
         echo "Creating ZIP file..."
-        7z a -tzip "../$env:APP_NAME-${{ github.ref_name }}.zip" "$env:APP_NAME"
+        cd release
+        7z a -tzip "../$env:APP_NAME-${{ github.ref_name }}.zip" *
         if ($LASTEXITCODE -ne 0) {
             echo "Error creating ZIP file"
             exit $LASTEXITCODE
@@ -118,7 +119,7 @@ jobs:
         # 复制EXE文件
         cd ..
         echo "Copying EXE file..."
-        Copy-Item "dist/$env:APP_NAME/$env:APP_NAME.exe" "$env:APP_NAME-${{ github.ref_name }}.exe"
+        Copy-Item "dist/$env:APP_NAME.exe" "$env:APP_NAME-${{ github.ref_name }}.exe"
         if ($LASTEXITCODE -ne 0) {
             echo "Error copying EXE file"
             exit $LASTEXITCODE
