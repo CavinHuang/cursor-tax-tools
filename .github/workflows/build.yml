@@ -3,7 +3,7 @@ name: Build Windows App
 on:
   push:
     branches: [ master ]
-    # tags: [ 'v*' ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ master ]
 
@@ -22,17 +22,20 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
+        pip install pandas numpy openpyxl python-Levenshtein pillow pyinstaller
         pip install -r requirements.txt
-        pip install pyinstaller pillow
 
-    - name: Create template
-      run: python create_template.py
-
-    - name: Create icon
-      run: python create_icon.py
+    - name: Create template and icon
+      run: |
+        # 确保目录存在
+        mkdir -p templates
+        # 创建模板和图标
+        python create_template.py
+        python create_icon.py
 
     - name: Build with PyInstaller
       run: |
+        # 修改spec文件中的name
         (Get-Content build_win.spec) -replace "name='关税查询工具'", "name='英国海关编码税率查询工具'" | Set-Content build_win.spec
         pyinstaller build_win.spec
 
