@@ -3,7 +3,7 @@
 block_cipher = None
 
 a = Analysis(
-    ['main.py'],  # 你的主程序文件
+    ['tariff_gui.py'],  # 你的主程序文件
     pathex=[],
     binaries=[],
     datas=[('templates', 'templates'), ('tariffs.db', '.')],  # 添加需要的资源文件
