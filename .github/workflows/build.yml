@@ -2,7 +2,6 @@ name: Build Windows App
 
 on:
   push:
-    # branches: [ master ]
     tags: [ 'v*' ]
   pull_request:
     branches: [ master ]
@@ -13,6 +12,7 @@ jobs:
     env:
       PYTHONIOENCODING: utf-8
       PYTHONUTF8: 1
+      APP_NAME: 英国海关编码税率查询工具
 
     steps:
     - uses: actions/checkout@v3
@@ -58,17 +58,29 @@ jobs:
       run: |
         # 修改spec文件中的name
         $content = Get-Content build_win.spec -Raw
-        $content = $content -replace "name='关税查询工具'", "name='英国海关编码税率查询工具'"
+        $content = $content -replace "name='关税查询工具'", "name='$env:APP_NAME'"
         [System.IO.File]::WriteAllText("build_win.spec", $content, [System.Text.Encoding]::UTF8)
         # 运行PyInstaller
         pyinstaller build_win.spec
+
+        # 检查构建结果
+        if (-not (Test-Path "dist/$env:APP_NAME")) {
+            echo "Error: Build directory not found"
+            Get-ChildItem dist
+            exit 1
+        }
+        if (-not (Test-Path "dist/$env:APP_NAME/$env:APP_NAME.exe")) {
+            echo "Error: Executable not found"
+            Get-ChildItem "dist/$env:APP_NAME"
+            exit 1
+        }
 
     # 总是上传构建产物
     - name: Upload Build Artifact
       uses: actions/upload-artifact@v3
       with:
         name: build-artifact
-        path: dist/英国海关编码税率查询工具
+        path: dist/${{ env.APP_NAME }}
         retention-days: 5
 
     - name: Check Build Type
@@ -81,24 +93,47 @@ jobs:
             echo "To create a release, please create a tag starting with 'v' (e.g., v1.0.0)"
         }
 
-    - name: Create release ZIP
+    - name: Create release files
       if: startsWith(github.ref, 'refs/tags/')
       shell: pwsh
       run: |
         echo "Creating release files for tag: $env:GITHUB_REF"
+
+        # 检查目录和文件
+        if (-not (Test-Path "dist/$env:APP_NAME")) {
+            echo "Error: Build directory not found"
+            Get-ChildItem dist
+            exit 1
+        }
+
+        # 创建ZIP文件
         cd dist
-        7z a -tzip "../英国海关编码税率查询工具-${{ github.ref_name }}.zip" "英国海关编码税率查询工具"
+        echo "Creating ZIP file..."
+        7z a -tzip "../$env:APP_NAME-${{ github.ref_name }}.zip" "$env:APP_NAME"
+        if ($LASTEXITCODE -ne 0) {
+            echo "Error creating ZIP file"
+            exit $LASTEXITCODE
+        }
+
+        # 复制EXE文件
         cd ..
-        copy "dist\英国海关编码税率查询工具\英国海关编码税率查询工具.exe" "英国海关编码税率查询工具-${{ github.ref_name }}.exe"
+        echo "Copying EXE file..."
+        Copy-Item "dist/$env:APP_NAME/$env:APP_NAME.exe" "$env:APP_NAME-${{ github.ref_name }}.exe"
+        if ($LASTEXITCODE -ne 0) {
+            echo "Error copying EXE file"
+            exit $LASTEXITCODE
+        }
+
         echo "Release files created successfully"
+        Get-ChildItem "$env:APP_NAME-${{ github.ref_name }}.*"
 
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          英国海关编码税率查询工具-${{ github.ref_name }}.zip
-          英国海关编码税率查询工具-${{ github.ref_name }}.exe
+          ${{ env.APP_NAME }}-${{ github.ref_name }}.zip
+          ${{ env.APP_NAME }}-${{ github.ref_name }}.exe
         name: Release ${{ github.ref_name }}
         draft: false
         prerelease: false
