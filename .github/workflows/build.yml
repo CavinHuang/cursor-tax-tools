@@ -115,7 +115,8 @@ jobs:
         # 创建ZIP文件
         echo "Creating ZIP file..."
         cd release
-        $zipName = "英国海关编码税率查询工具-${{ github.ref_name }}.zip"
+        $version = "${{ github.ref_name }}"
+        $zipName = "uk-tax-tools-$version.zip"
         echo "Creating zip file: $zipName"
         7z a -tzip "../$zipName" *
         if ($LASTEXITCODE -ne 0) {
@@ -125,7 +126,7 @@ jobs:
 
         # 复制EXE文件
         cd ..
-        $exeName = "英国海关编码税率查询工具-${{ github.ref_name }}.exe"
+        $exeName = "uk-tax-tools-$version.exe"
         echo "Creating exe file: $exeName"
         Copy-Item "dist/$env:APP_NAME.exe" "$exeName"
         if ($LASTEXITCODE -ne 0) {
@@ -133,9 +134,13 @@ jobs:
             exit $LASTEXITCODE
         }
 
+        # 重命名为中文名称
+        Rename-Item "$zipName" "英国海关编码税率查询工具-$version.zip"
+        Rename-Item "$exeName" "英国海关编码税率查询工具-$version.exe"
+
         # 显示文件列表
         echo "Created files:"
-        Get-ChildItem "英国海关编码税率查询工具-${{ github.ref_name }}.*"
+        Get-ChildItem "英国海关编码税率查询工具-$version.*"
 
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/')
