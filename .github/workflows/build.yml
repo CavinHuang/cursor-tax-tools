@@ -118,12 +118,14 @@ jobs:
 
     - name: Build with PyInstaller
       run: |
-        # 修改spec文件中的name
-        sed -i '' "s/name='英国海关编码税率查询工具'/name='$APP_NAME'/" build_mac.spec
-        pyinstaller build_mac.spec
+        # 生成默认spec文件
+        pyi-makespec --windowed --name="${APP_NAME}" --add-data "templates:templates" --add-data "tariffs.db:." --icon=app.ico main.py
+
+        # 运行PyInstaller
+        pyinstaller "${APP_NAME}.spec"
 
         # 检查构建结果
-        if [ ! -d "dist/$APP_NAME.app" ]; then
+        if [ ! -d "dist/${APP_NAME}.app" ]; then
           echo "Error: App bundle not found"
           ls dist
           exit 1
