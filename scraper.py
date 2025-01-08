@@ -11,40 +11,6 @@ from tariff_db import TariffDB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-async def scrape_urls(urls: List[str], headers: Dict = None, timeout: int = 30) -> List[str]:
-    """异步抓取多个URL"""
-    async def fetch_url(url: str) -> str:
-        try:
-            async with aiohttp.ClientSession(headers=headers) as session:
-                async with session.get(url, timeout=timeout) as response:
-                    if response.status == 200:
-                        return await response.text()
-                    else:
-                        logger.error(f"请求失败: {url}, 状态码: {response.status}")
-                        return ""
-        except asyncio.TimeoutError:
-            logger.error(f"请求超时: {url}")
-            return ""
-        except Exception as e:
-            logger.error(f"请求异常: {url}, {str(e)}")
-            return ""
-
-    # 使用信号量控制并发数
-    sem = asyncio.Semaphore(3)  # 最多3个并发请求
-
-    async def fetch_with_sem(url: str) -> str:
-        async with sem:
-            return await fetch_url(url)
-
-    # 并发请求所有URL
-    tasks = [fetch_with_sem(url) for url in urls]
-    try:
-        results = await asyncio.gather(*tasks)
-        return results
-    except Exception as e:
-        logger.error(f"并发请求失败: {str(e)}")
-        return [""] * len(urls)
-
 class TariffScraper:
     def __init__(self):
         self.base_url = "https://www.trade-tariff.service.gov.uk"
