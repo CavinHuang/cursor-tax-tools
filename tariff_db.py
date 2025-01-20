@@ -81,13 +81,15 @@ class TariffDB:
     def get_all_tariffs(self) -> List[Dict]:
         """获取所有关税记录"""
         try:
-            cur = self.conn.execute("SELECT code, description, rate, url FROM tariffs")
+            cur = self.conn.execute("SELECT code, description, rate, url, north_ireland_url, north_ireland_rate FROM tariffs")
             return [
                 {
                     'code': row[0],
                     'description': row[1],
                     'rate': row[2],
-                    'url': row[3]
+                    'url': row[3],
+                    'north_ireland_url': row[4],
+                    'north_ireland_rate': row[5]
                 }
                 for row in cur.fetchall()
             ]
@@ -134,6 +136,22 @@ class TariffDB:
         except Exception as e:
             logger.error(f"获取已存在编码失败: {str(e)}")
             return set()
+    def get_existing_codes_north_ireland(self) -> set:
+        """获取已存在的所有北爱尔兰商品编码"""
+        try:
+            cur = self.conn.execute("SELECT code FROM tariffs WHERE north_ireland_rate IS NOT NULL")
+            return set(row[0] for row in cur.fetchall())
+        except Exception as e:
+            logger.error(f"获取已存在北爱尔兰编码失败: {str(e)}")
+            return set()
+
+    def update_north_ireland_tariff(self, code: str, north_ireland_rate: str, north_ireland_url: str):
+        try:
+            with self.conn:
+                self.conn.execute("UPDATE tariffs SET north_ireland_rate = ?, north_ireland_url = ? WHERE code = ?", (north_ireland_rate, north_ireland_url, code))
+        except Exception as e:
+            logger.error(f"更新北爱尔兰关税记录失败: {str(e)}")
+            raise
 
     def add_scrape_error(self, code: str, error_message: str):
         """记录抓取错误"""

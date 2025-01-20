@@ -3,9 +3,7 @@ from typing import List, Dict, Set
 from tools.web_scraper import scrape_urls
 from bs4 import BeautifulSoup
 import re
-import json
 import logging
-import aiohttp
 from tariff_db import TariffDB
 
 logging.basicConfig(level=logging.INFO)
