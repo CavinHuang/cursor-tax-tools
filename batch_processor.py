@@ -33,8 +33,8 @@ class BatchProcessor:
             输出文件路径，处理失败返回None
         """
         try:
-            # 读取Excel文件
-            df = pd.read_excel(file_path)
+            # 读取Excel文件，将code列作为文本处理
+            df = pd.read_excel(file_path, dtype={'code': str})
             if 'code' not in df.columns:
                 self.log_queue.put("错误：Excel文件必须包含'code'列")
                 return None
@@ -47,20 +47,24 @@ class BatchProcessor:
             # 处理每一行
             results = []
             for index, row in df.iterrows():
+                # 获取code并且去掉空格
                 code = str(row['code']).strip()
+
                 # 使用模糊搜索找到最佳匹配
                 matches = self.api.fuzzy_search(code, limit=1)
                 if matches:
                     best_match = matches[0]
                     results.append({
-                        'code': code,
+                        'code': code,  # 使用原始code
                         'rate': best_match['rate'],
+                        'ni_rate': best_match['north_ireland_rate'],
                         '相似度': f"{best_match['similarity']*100:.1f}%"
                     })
                 else:
                     results.append({
-                        'code': code,
+                        'code': code,  # 使用原始code
                         'rate': '',
+                        'ni_rate': '',
                         '相似度': "0.0%"
                     })
 
@@ -77,8 +81,13 @@ class BatchProcessor:
                 f"processed_{timestamp}_{os.path.basename(file_path)}"
             )
 
-            # 保存结果
-            result_df.to_excel(output_file, index=False)
+            # 保存结果，确保code列作为文本保存
+            with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
+                result_df.to_excel(writer, index=False)
+                # 设置code列为文本格式
+                worksheet = writer.sheets['Sheet1']
+                for cell in worksheet['A']:
+                    cell.number_format = '@'
 
             self.status = "completed"
             self.log_queue.put(f"处理完成，结果已保存到: {output_file}")

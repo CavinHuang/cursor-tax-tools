@@ -71,7 +71,7 @@ class TariffGUI:
         result_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
         # 创建表格
-        columns = ('编码', '描述', '税率', '相似度')
+        columns = ('编码', '税率', '网址', '北爱尔兰税率', '北爱尔兰网址', '相似度')
         self.result_tree = ttk.Treeview(
             result_frame,
             columns=columns,
@@ -80,9 +80,18 @@ class TariffGUI:
         )
 
         # 设置列
+        column_widths = {
+            '编码': 120,
+            '税率': 100,
+            '网址': 150,
+            '北爱尔兰税率': 100,
+            '北爱尔兰网址': 150,
+            '相似度': 80
+        }
+
         for col in columns:
             self.result_tree.heading(col, text=col)
-            self.result_tree.column(col, width=100)
+            self.result_tree.column(col, width=column_widths[col])
 
         # 添加滚动条
         scrollbar = ttk.Scrollbar(
@@ -98,6 +107,20 @@ class TariffGUI:
 
         # 绑定双击事件
         self.result_tree.bind('<Double-1>', self.on_result_double_click)
+
+        # 创建右键菜单
+        self.context_menu = tk.Menu(self.root, tearoff=0)
+        self.context_menu.add_command(label="复制英国税率", command=self.copy_uk_rate)
+        self.context_menu.add_command(label="打开英国税率网址", command=self.open_uk_url)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="复制北爱尔兰税率", command=self.copy_ni_rate)
+        self.context_menu.add_command(label="打开北爱尔兰税率网址", command=self.open_ni_url)
+
+        # 绑定右键事件（同时支持 Windows 和 macOS）
+        self.result_tree.bind('<Button-2>', self.show_context_menu)  # macOS 右键
+        self.result_tree.bind('<Button-3>', self.show_context_menu)  # Windows 右键
+        if self.root.tk.call('tk', 'windowingsystem') == 'aqua':  # macOS
+            self.result_tree.bind('<Control-1>', self.show_context_menu)  # macOS Control+左键
 
         # 状态栏
         self.status_var = tk.StringVar(value="就绪")
@@ -206,20 +229,35 @@ class TariffGUI:
                 'end',
                 values=(
                     result['code'],
-                    result.get('description', ''),
                     result.get('rate', ''),
+                    result.get('url', ''),
+                    result.get('north_ireland_rate', ''),
+                    result.get('north_ireland_url', ''),
                     f"{similarity*100:.1f}%"
-                ),
-                tags=(result.get('url', ''),)
+                )
             )
 
         self.status_var.set(f"找到 {len(results)} 条结果")
 
     def on_result_double_click(self, event):
         """处理结果双击事件"""
+        # 获取点击的项目和列
         item = self.result_tree.selection()[0]
-        url = self.result_tree.item(item)['tags'][0]
-        if url:
+        column = self.result_tree.identify_column(event.x)
+        col_num = int(column.replace('#', ''))
+
+        # 获取值
+        values = self.result_tree.item(item)['values']
+
+        # 根据列号确定URL
+        url = None
+        if col_num == 3:  # 英国网址列
+            url = values[2]  # 因为values是从0开始索引
+        elif col_num == 5:  # 北爱尔兰网址列
+            url = values[4]
+
+        # 如果点击的是URL列且URL不为空，则打开浏览器
+        if url and url.strip():
             import webbrowser
             webbrowser.open(url)
 
@@ -227,6 +265,59 @@ class TariffGUI:
         """处理模糊匹配状态改变"""
         is_fuzzy = self.fuzzy_var.get()
         logger.debug(f"模糊匹配状态改变: {is_fuzzy}")
+
+    def show_context_menu(self, event):
+        """显示右键菜单"""
+        # 获取点击的项目
+        item = self.result_tree.identify_row(event.y)
+        if item:
+            # 选中该项
+            self.result_tree.selection_set(item)
+            # 显示菜单
+            try:
+                self.context_menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                self.context_menu.grab_release()  # 释放菜单的事件捕获
+
+    def copy_to_clipboard(self, text):
+        """复制文本到剪贴板"""
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.status_var.set("已复制到剪贴板")
+
+    def copy_uk_rate(self):
+        """复制英国税率"""
+        item = self.result_tree.selection()[0]
+        values = self.result_tree.item(item)['values']
+        rate = values[1]  # 英国税率在第2列
+        if rate:
+            self.copy_to_clipboard(rate)
+
+    def copy_ni_rate(self):
+        """复制北爱尔兰税率"""
+        item = self.result_tree.selection()[0]
+        values = self.result_tree.item(item)['values']
+        rate = values[3]  # 北爱尔兰税率在第4列
+        if rate:
+            self.copy_to_clipboard(rate)
+
+    def open_uk_url(self):
+        """打开英国税率网址"""
+        item = self.result_tree.selection()[0]
+        values = self.result_tree.item(item)['values']
+        url = values[2]  # 英国网址在第3列
+        if url and url.strip():
+            import webbrowser
+            webbrowser.open(url)
+
+    def open_ni_url(self):
+        """打开北爱尔兰税率网址"""
+        item = self.result_tree.selection()[0]
+        values = self.result_tree.item(item)['values']
+        url = values[4]  # 北爱尔兰网址在第5列
+        if url and url.strip():
+            import webbrowser
+            webbrowser.open(url)
 
     def run(self):
         """运行GUI"""

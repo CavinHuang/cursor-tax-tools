@@ -27,7 +27,9 @@ class TariffDB:
                     code TEXT PRIMARY KEY,
                     description TEXT,
                     rate TEXT,
-                    url TEXT
+                    url TEXT,
+                    north_ireland_rate TEXT,
+                    north_ireland_url TEXT
                 )
                 """)
                 # 添加错误记录表
@@ -62,7 +64,7 @@ class TariffDB:
         """精确查询关税记录"""
         try:
             cur = self.conn.execute(
-                "SELECT code, description, rate, url FROM tariffs WHERE code = ?",
+                "SELECT code, description, rate, url, north_ireland_rate, north_ireland_url FROM tariffs WHERE code = ?",
                 (code,)
             )
             row = cur.fetchone()
@@ -71,7 +73,9 @@ class TariffDB:
                     'code': row[0],
                     'description': row[1],
                     'rate': row[2],
-                    'url': row[3]
+                    'url': row[3],
+                    'north_ireland_rate': row[4],
+                    'north_ireland_url': row[5]
                 }
             return None
         except Exception as e:
