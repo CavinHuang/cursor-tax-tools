@@ -5,12 +5,18 @@ from tariff_api import TariffAPI
 import queue
 import threading
 from batch_gui import BatchProcessFrame
+import asyncio
+import tkinter.messagebox as messagebox
+from update_gui import UpdateFrame
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 class TariffGUI:
     def __init__(self):
+        # 添加必要的导入
+        import asyncio
+
         self.root = tk.Tk()
         self.root.title("关税查询工具")
         self.setup_ui()
@@ -19,6 +25,29 @@ class TariffGUI:
 
     def setup_ui(self):
         """设置UI界面"""
+        # 创建工具栏框架
+        toolbar_frame = ttk.Frame(self.root)
+        toolbar_frame.pack(fill=tk.X, padx=5, pady=2)
+
+        # 添加更新按钮
+        self.update_btn = ttk.Button(
+            toolbar_frame,
+            text="更新数据",
+            command=self.start_update
+        )
+        self.update_btn.pack(side=tk.LEFT, padx=5)
+
+        # 添加更新进度条
+        self.update_progress_var = tk.DoubleVar()
+        self.update_progress = ttk.Progressbar(
+            toolbar_frame,
+            variable=self.update_progress_var,
+            mode='determinate',
+            length=200
+        )
+        self.update_progress.pack(side=tk.LEFT, padx=5)
+        self.update_progress.pack_forget()  # 初始时隐藏进度条
+
         # 创建标签页
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -31,6 +60,10 @@ class TariffGUI:
         # 批量查询标签页
         self.batch_frame = BatchProcessFrame(self.notebook)
         self.notebook.add(self.batch_frame, text="批量查询")
+
+        # 数据更新标签页
+        self.update_frame = UpdateFrame(self.notebook)
+        self.notebook.add(self.update_frame, text="数据更新")
 
     def setup_single_search(self):
         """设置单个查询界面"""
@@ -318,6 +351,72 @@ class TariffGUI:
         if url and url.strip():
             import webbrowser
             webbrowser.open(url)
+
+    def start_update(self):
+        """开始更新数据"""
+        # 禁用更新按钮
+        self.update_btn.configure(state='disabled')
+        self.status_var.set("正在更新数据...")
+        self.update_progress.pack(side=tk.LEFT, padx=5)  # 显示进度条
+        self.update_progress_var.set(0)
+
+        # 在后台线程中执行更新
+        thread = threading.Thread(
+            target=self._update_data,
+            daemon=True
+        )
+        thread.start()
+
+    def _update_data(self):
+        """在后台线程中执行数据更新"""
+        try:
+            from update_tariffs import TariffScraper
+            scraper = TariffScraper()
+
+            # 设置进度回调
+            def update_progress(progress):
+                self.queue.put((
+                    self.update_progress_var.set,
+                    (progress * 100,),
+                    {}
+                ))
+            scraper.set_progress_callback(update_progress)
+
+            # 创建异步事件循环
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            # 执行更新
+            success = loop.run_until_complete(scraper.scrape_tariffs())
+            loop.close()
+
+            if success:
+                # 更新完成
+                self.queue.put((self._update_complete, (), {}))
+            else:
+                raise Exception("更新失败")
+
+        except Exception as e:
+            logger.error(f"更新数据失败: {str(e)}")
+            self.queue.put((
+                self.status_var.set,
+                (f"更新失败: {str(e)}",),
+                {}
+            ))
+        finally:
+            # 恢复按钮状态和隐藏进度条
+            self.queue.put((self._reset_update_ui, (), {}))
+
+    def _update_complete(self):
+        """更新完成的处理"""
+        self.status_var.set("数据更新完成")
+        messagebox.showinfo("成功", "数据更新完成")
+
+    def _reset_update_ui(self):
+        """重置更新UI状态"""
+        self.update_btn.configure(state='normal')
+        self.update_progress.pack_forget()
+        self.update_progress_var.set(0)
 
     def run(self):
         """运行GUI"""

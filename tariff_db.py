@@ -149,13 +149,17 @@ class TariffDB:
             logger.error(f"获取已存在北爱尔兰编码失败: {str(e)}")
             return set()
 
-    def update_north_ireland_tariff(self, code: str, north_ireland_rate: str, north_ireland_url: str):
+    def update_north_ireland_tariff(self, code: str, rate: str, url: str):
+        """更新北爱尔兰关税信息"""
         try:
             with self.conn:
-                self.conn.execute("UPDATE tariffs SET north_ireland_rate = ?, north_ireland_url = ? WHERE code = ?", (north_ireland_rate, north_ireland_url, code))
+                self.conn.execute("""
+                    UPDATE tariffs
+                    SET north_ireland_rate = ?, north_ireland_url = ?
+                    WHERE code = ?
+                """, (rate, url, code))
         except Exception as e:
-            logger.error(f"更新北爱尔兰关税记录失败: {str(e)}")
-            raise
+            logger.error(f"更新北爱尔兰关税失败: {str(e)}")
 
     def add_scrape_error(self, code: str, error_message: str):
         """记录抓取错误"""
@@ -193,3 +197,25 @@ class TariffDB:
                 self.conn.execute("DELETE FROM scrape_errors WHERE code = ?", (code,))
         except Exception as e:
             logger.error(f"清除抓取错误记录失败: {str(e)}")
+
+    def get_all_codes(self) -> List[str]:
+        """获取所有商品编码"""
+        try:
+            with self.conn:
+                cursor = self.conn.execute("SELECT code FROM tariffs")
+                return [row[0] for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"获取商品编码失败: {str(e)}")
+            return []
+
+    def update_uk_tariff(self, code: str, description: str, rate: str, url: str):
+        """更新英国关税信息"""
+        try:
+            with self.conn:
+                self.conn.execute("""
+                    UPDATE tariffs
+                    SET description = ?, rate = ?, url = ?
+                    WHERE code = ?
+                """, (description, rate, url, code))
+        except Exception as e:
+            logger.error(f"更新英国关税失败: {str(e)}")
