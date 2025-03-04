@@ -175,7 +175,7 @@ class TariffDB:
 
                 return [
                     {
-                        'code': row[0],
+                        'code': str(row[0]).zfill(10),  # 确保编码是10位字符串
                         'description': row[1],
                         'rate': row[2],
                         'north_ireland_rate': row[3]

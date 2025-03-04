@@ -49,21 +49,43 @@ class BaseScraper:
         if self.log_callback:
             self.log_callback(message)
 
+    def format_commodity_code(self, code: str) -> str:
+        """格式化商品编码，确保是10位数字"""
+        # 移除所有非数字字符
+        code = ''.join(filter(str.isdigit, code))
+        # 补零到10位
+        return code.zfill(10)
+
     async def scrape_with_retry(self, urls: List[str]) -> List[str]:
         """带重试的抓取"""
-        for retry in range(self.max_retries):
-            try:
-                results = await scrape_urls(
-                    urls,
-                    headers=self.headers,
-                    timeout=self.timeout
-                )
-                if any(results):  # 只要有一个成功就返回
-                    return results
-            except Exception as e:
-                logger.warning(f"第{retry + 1}次重试失败: {str(e)}")
-                await asyncio.sleep(1)  # 失败后等待1秒再重试
-        return [""] * len(urls)
+        try:
+            # 确保URL中的编码格式正确
+            formatted_urls = []
+            for url in urls:
+                if '/commodities/' in url:
+                    code = url.split('/commodities/')[-1]
+                    base = url.split('/commodities/')[0]
+                    formatted_code = self.format_commodity_code(code)
+                    formatted_urls.append(f"{base}/commodities/{formatted_code}")
+                else:
+                    formatted_urls.append(url)
+
+            for retry in range(self.max_retries):
+                try:
+                    results = await scrape_urls(
+                        formatted_urls,
+                        headers=self.headers,
+                        timeout=self.timeout
+                    )
+                    if any(results):  # 只要有一个成功就返回
+                        return results
+                except Exception as e:
+                    logger.warning(f"第{retry + 1}次重试失败: {str(e)}")
+                    await asyncio.sleep(1)  # 失败后等待1秒再重试
+            return [""] * len(urls)
+        except Exception as e:
+            logger.error(f"URL处理失败: {str(e)}")
+            return [""] * len(urls)
 
     def parse_commodity_page(self, html_content: str) -> Optional[Dict]:
         """解析商品页面"""

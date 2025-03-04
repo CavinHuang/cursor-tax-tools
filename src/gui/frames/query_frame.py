@@ -4,6 +4,10 @@ import logging
 from ...core.db.tariff_db import TariffDB
 import webbrowser
 import tkinter.messagebox as messagebox
+import asyncio
+import threading
+from ...core.scraper.uk_scraper import UKScraper
+from ...core.scraper.ni_scraper import NIScraper
 
 logger = logging.getLogger(__name__)
 
@@ -12,6 +16,58 @@ class QueryFrame(ttk.Frame):
         super().__init__(master)
         self.db = TariffDB()  # 使用默认的数据库路径
         self.setup_ui()
+        self.is_updating = False
+
+    def render_buttons(self, item_id):
+        """创建操作链接框架"""
+        frame = ttk.Frame(self.result_tree)
+
+        # 创建链接样式的标签
+        style = ttk.Style()
+        style.configure(
+            'Link.TLabel',
+            foreground='blue',
+            font=('微软雅黑', 9, 'underline')
+        )
+
+        # 更新英国关税链接
+        uk_link = ttk.Label(
+            frame,
+            text="更新英国",
+            style='Link.TLabel',
+            cursor='hand2'  # 鼠标悬停时显示手型
+        )
+        uk_link.pack(side=tk.LEFT, padx=10)
+
+        # 分隔符
+        ttk.Label(frame, text="|").pack(side=tk.LEFT)
+
+        # 更新北爱关税链接
+        ni_link = ttk.Label(
+            frame,
+            text="更新北爱",
+            style='Link.TLabel',
+            cursor='hand2'
+        )
+        ni_link.pack(side=tk.LEFT, padx=10)
+
+        # 绑定点击事件 - 直接使用 item_id
+        uk_link.bind('<Button-1>', lambda e, iid=item_id: self.update_uk_rate(iid))
+        ni_link.bind('<Button-1>', lambda e, iid=item_id: self.update_ni_rate(iid))
+
+        # 绑定鼠标悬停事件以改变颜色
+        def on_enter(event, label):
+            label.configure(foreground='#0066cc')
+
+        def on_leave(event, label):
+            label.configure(foreground='blue')
+
+        uk_link.bind('<Enter>', lambda e: on_enter(e, uk_link))
+        uk_link.bind('<Leave>', lambda e: on_leave(e, uk_link))
+        ni_link.bind('<Enter>', lambda e: on_enter(e, ni_link))
+        ni_link.bind('<Leave>', lambda e: on_leave(e, ni_link))
+
+        return frame
 
     def setup_ui(self):
         """设置UI界面"""
@@ -57,25 +113,65 @@ class QueryFrame(ttk.Frame):
         result_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
         # 结果列表
-        columns = ('编码', '商品描述', '英国税率', '北爱税率')
+        columns = ('编码', '英国税率', '北爱税率', '操作')
         self.result_tree = ttk.Treeview(
             result_frame,
             columns=columns,
             show='headings',
-            height=10
+            height=10,
+            style='Custom.Treeview'  # 使用自定义样式
+        )
+
+        # 创建自定义样式
+        style = ttk.Style()
+        style.configure(
+            'Custom.Treeview',
+            rowheight=30,  # 设置行高
+            font=('微软雅黑', 10),  # 设置字体
+            background='#ffffff',  # 设置背景色
+        )
+        style.configure(
+            'Custom.Treeview.Heading',
+            font=('微软雅黑', 10, 'bold'),  # 设置表头字体
+            padding=5  # 设置表头内边距
         )
 
         # 设置列
         column_widths = {
-            '编码': 100,
-            '商品描述': 300,
-            '英国税率': 100,
-            '北爱税率': 100
+            '编码': 150,
+            '英国税率': 150,
+            '北爱税率': 150,
+            '操作': 200
         }
 
         for col in columns:
-            self.result_tree.heading(col, text=col)
-            self.result_tree.column(col, width=column_widths[col])
+            self.result_tree.heading(
+                col,
+                text=col,
+                anchor=tk.CENTER  # 表头文字居中
+            )
+            self.result_tree.column(
+                col,
+                width=column_widths[col],
+                anchor=tk.CENTER  # 单元格文字居中
+            )
+
+        # 设置选中行的样式
+        style.map(
+            'Custom.Treeview',
+            background=[('selected', '#e7f3ff')],  # 选中行的背景色
+            foreground=[('selected', '#000000')]   # 选中行的文字颜色
+        )
+
+        def fixed_map(option):
+            """修复选中行背景色在 Windows 上的显示问题"""
+            return [elm for elm in style.map('Treeview', query_opt=option)
+                    if elm[:2] != ('!disabled', '!selected')]
+
+        style.map('Treeview',
+            foreground=fixed_map('foreground'),
+            background=fixed_map('background')
+        )
 
         # 添加滚动条
         scrollbar = ttk.Scrollbar(
@@ -99,14 +195,22 @@ class QueryFrame(ttk.Frame):
         )
         status_bar.pack(fill=tk.X, padx=5, pady=2)
 
-        # 添加右键菜单
+        # 修改右键菜单
         self.context_menu = tk.Menu(self, tearoff=0)
         self.context_menu.add_command(label="复制编码", command=self.copy_code)
-        self.context_menu.add_command(label="复制税率", command=self.copy_rate)
-        self.context_menu.add_command(label="复制描述", command=self.copy_description)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="复制英国关税", command=self.copy_uk_rate)
+        self.context_menu.add_command(label="复制北爱尔兰关税", command=self.copy_ni_rate)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="打开英国关税网址", command=self.open_uk_url)
+        self.context_menu.add_command(label="打开北爱尔兰关税网址", command=self.open_ni_url)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="更新英国关税", command=self.update_uk_rate)
+        self.context_menu.add_command(label="更新北爱关税", command=self.update_ni_rate)
 
         # 绑定右键菜单
-        self.result_tree.bind('<Button-3>', self.show_context_menu)
+        self.result_tree.bind('<Button-3>', self.show_context_menu)  # Windows/Linux右键
+        self.result_tree.bind('<Button-2>', self.show_context_menu)  # macOS右键
 
         # 绑定事件
         self.result_tree.bind('<Double-1>', self.on_double_click)
@@ -134,14 +238,33 @@ class QueryFrame(ttk.Frame):
                 self.status_var.set("未找到匹配的商品")
                 return
 
-            # 显示结果
-            for result in results:
-                self.result_tree.insert('', 'end', values=(
-                    result['code'],
-                    result['description'],
+            # 显示结果时添加交替行颜色
+            for i, result in enumerate(results):
+                item_id = self.result_tree.insert('', 'end', values=(
+                    str(result['code']).zfill(10),  # 确保显示10位编码
                     result['rate'],
-                    result['north_ireland_rate']
+                    result['north_ireland_rate'],
+                    ""  # 操作列留空
                 ))
+
+                # 设置交替行颜色
+                if i % 2:
+                    self.result_tree.tag_configure('oddrow', background='#f5f5f5')
+                    self.result_tree.item(item_id, tags=('oddrow',))
+
+                # 创建按钮框架
+                button_frame = self.render_buttons(item_id)
+
+                # 获取行的位置
+                bbox = self.result_tree.bbox(item_id, column='操作')
+                if bbox:  # 确保行可见
+                    # 放置按钮框架，调整位置使按钮垂直居中
+                    button_frame.place(
+                        x=bbox[0] + 2,
+                        y=bbox[1] + (bbox[3] - 26) // 2,  # 26是按钮的高度
+                        width=bbox[2] - 4,
+                        height=26
+                    )
 
             self.status_var.set(f"找到 {len(results)} 条结果")
 
@@ -151,26 +274,41 @@ class QueryFrame(ttk.Frame):
 
     def on_double_click(self, event):
         """双击处理"""
-        item = self.result_tree.selection()[0]
-        code = self.result_tree.item(item)['values'][0]
+        if not self.result_tree.selection():
+            return
 
-        # 打开浏览器访问对应的URL
-        try:
-            url = f"https://www.trade-tariff.service.gov.uk/commodities/{code}"
-            webbrowser.open(url)
-        except Exception as e:
-            logger.error(f"打开URL失败: {str(e)}")
-            messagebox.showerror("错误", f"打开URL失败: {str(e)}")
+        # 获取点击的列和位置
+        column = self.result_tree.identify_column(event.x)
+        item = self.result_tree.selection()[0]
+        values = self.result_tree.item(item)['values']
+
+        if column == '#4':  # 操作列
+            # 获取点击的x坐标
+            x = event.x - self.result_tree.winfo_x()
+            # 操作列的中点
+            mid = self.result_tree.column('操作')['width'] / 2
+
+            if x < mid:
+                self.update_uk_rate()  # 点击左半部分更新英国关税
+            else:
+                self.update_ni_rate()  # 点击右半部分更新北爱关税
+        elif column == '#2':  # 英国税率列
+            self.open_uk_url()
+        elif column == '#3':  # 北爱税率列
+            self.open_ni_url()
 
     def show_context_menu(self, event):
         """显示右键菜单"""
-        try:
-            item = self.result_tree.identify_row(event.y)
-            if item:
-                self.result_tree.selection_set(item)
-                self.context_menu.post(event.x_root, event.y_root)
-        finally:
-            self.context_menu.grab_release()
+        # 获取点击位置的项
+        item = self.result_tree.identify_row(event.y)
+        if item:
+            # 选中该项
+            self.result_tree.selection_set(item)
+            # 显示菜单
+            try:
+                self.context_menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                self.context_menu.grab_release()
 
     def copy_code(self):
         """复制商品编码"""
@@ -180,19 +318,122 @@ class QueryFrame(ttk.Frame):
             self.clipboard_append(code)
             self.status_var.set("已复制商品编码")
 
-    def copy_rate(self):
-        """复制税率"""
+    def copy_uk_rate(self):
+        """复制英国关税"""
         if selected := self.result_tree.selection():
-            values = self.result_tree.item(selected[0])['values']
-            rate = f"英国: {values[2]}, 北爱: {values[3]}"
+            rate = self.result_tree.item(selected[0])['values'][1]
             self.clipboard_clear()
             self.clipboard_append(rate)
-            self.status_var.set("已复制税率")
+            self.status_var.set("已复制英国关税")
 
-    def copy_description(self):
-        """复制商品描述"""
+    def copy_ni_rate(self):
+        """复制北爱尔兰关税"""
         if selected := self.result_tree.selection():
-            desc = self.result_tree.item(selected[0])['values'][1]
+            rate = self.result_tree.item(selected[0])['values'][2]
             self.clipboard_clear()
-            self.clipboard_append(desc)
-            self.status_var.set("已复制商品描述")
+            self.clipboard_append(rate)
+            self.status_var.set("已复制北爱尔兰关税")
+
+    def open_uk_url(self):
+        """打开英国关税网址"""
+        if selected := self.result_tree.selection():
+            code = self.result_tree.item(selected[0])['values'][0]
+            try:
+                url = f"https://www.trade-tariff.service.gov.uk/commodities/{code}"
+                webbrowser.open(url)
+                self.status_var.set(f"已在浏览器中打开英国关税网址")
+            except Exception as e:
+                logger.error(f"打开英国关税网址失败: {str(e)}")
+                messagebox.showerror("错误", f"打开网址失败: {str(e)}")
+
+    def open_ni_url(self):
+        """打开北爱尔兰关税网址"""
+        if selected := self.result_tree.selection():
+            code = self.result_tree.item(selected[0])['values'][0]
+            try:
+                url = f"https://www.trade-tariff.service.gov.uk/xi/commodities/{code}"
+                webbrowser.open(url)
+                self.status_var.set(f"已在浏览器中打开北爱尔兰关税网址")
+            except Exception as e:
+                logger.error(f"打开北爱尔兰关税网址失败: {str(e)}")
+                messagebox.showerror("错误", f"打开网址失败: {str(e)}")
+
+    async def _do_update_uk_rate(self, code: str) -> bool:
+        """执行英国关税更新"""
+        scraper = UKScraper()
+        scraper.set_progress_callback(lambda p, c: None)  # 不需要进度回调
+        scraper.set_log_callback(lambda m: self.status_var.set(m))
+        print(code)
+        print('============')
+        # 将单个编码转换为列表
+        return await scraper.update_tariffs([code])
+
+    async def _do_update_ni_rate(self, code: str) -> bool:
+        """执行北爱关税更新"""
+        scraper = NIScraper()
+        scraper.set_progress_callback(lambda p, c: None)
+        scraper.set_log_callback(lambda m: self.status_var.set(m))
+        # 将单个编码转换为列表
+        return await scraper.update_tariffs([code])
+
+    def _update_in_thread(self, code: str, update_func):
+        """在后台线程中执行更新"""
+        if self.is_updating:
+            messagebox.showwarning("警告", "正在更新中，请稍候...")
+            return
+
+        self.is_updating = True
+        try:
+            # 创建新的事件循环
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            # 执行更新
+            success = loop.run_until_complete(update_func(code))
+
+            loop.close()
+
+            if success:
+                self.after(0, lambda: self.status_var.set("更新成功"))
+                # 刷新显示
+                self.after(0, self.search)
+            else:
+                self.after(0, lambda: messagebox.showerror("错误", "更新失败"))
+        except Exception as e:
+            logger.error(f"更新失败: {str(e)}")
+            self.after(0, lambda: messagebox.showerror("错误", f"更新失败: {str(e)}"))
+        finally:
+            self.is_updating = False
+
+    def update_uk_rate(self, item_id):
+        """更新英国关税"""
+        values = self.result_tree.item(item_id)['values']
+        if not values:
+            return
+
+        code = str(values[0]).zfill(10)  # 确保是10位字符串
+        # 在后台线程中执行更新
+        thread = threading.Thread(
+            target=self._update_in_thread,
+            args=(code, self._do_update_uk_rate),
+            daemon=True
+        )
+        thread.start()
+
+    def update_ni_rate(self, item_id):
+        """更新北爱关税"""
+        values = self.result_tree.item(item_id)['values']
+        if not values:
+            return
+
+        code = str(values[0])  # 确保编码是字符串
+        # 在后台线程中执行更新
+        thread = threading.Thread(
+            target=self._update_in_thread,
+            args=(code, self._do_update_ni_rate),
+            daemon=True
+        )
+        thread.start()
+
+# https://www.trade-tariff.service.gov.uk/commodities/0101210000
+# https://www.trade-tariff.service.gov.uk/commodities/101210000

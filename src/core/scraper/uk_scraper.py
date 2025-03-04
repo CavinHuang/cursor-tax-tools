@@ -24,7 +24,10 @@ class UKScraper(BaseScraper):
                 batch = codes[i:i + batch_size]
                 current_batch = i // batch_size + 1
                 self.log(f"处理第 {current_batch}/{total_batches} 批")
-                urls = [f"{self.base_url}{code}" for code in batch]
+
+                # 格式化编码
+                formatted_batch = [self.format_commodity_code(code) for code in batch]
+                urls = [f"{self.base_url}{code}" for code in formatted_batch]
 
                 contents = await self.scrape_with_retry(urls)
 
