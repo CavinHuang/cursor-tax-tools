@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 class QueryFrame(ttk.Frame):
     def __init__(self, master):
         super().__init__(master)
-        self.db = TariffDB()
+        self.db = TariffDB()  # 使用默认的数据库路径
         self.setup_ui()
 
     def setup_ui(self):

@@ -60,4 +60,3 @@ datas/*
 !datas/templates/
 datas/templates/*
 !datas/templates/batch_rate_template.xlsx
-!datas/tariffs.db

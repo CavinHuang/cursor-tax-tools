@@ -22,7 +22,7 @@ class BatchFrame(ttk.Frame):
 
         self.setup_ui()
         self.setup_queue()
-        self.db = TariffDB()
+        self.db = TariffDB()  # 使用默认的数据库路径
 
     def setup_ui(self):
         """设置UI界面"""
