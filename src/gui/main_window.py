@@ -4,6 +4,7 @@ import logging
 from src.gui.frames.update_frame import UpdateFrame
 from src.gui.frames.batch_frame import BatchFrame
 from src.gui.frames.query_frame import QueryFrame
+from src.gui.frames.web_search_frame import WebSearchFrame
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,10 @@ class TariffGUI:
         # 更新数据标签页
         self.update_frame = UpdateFrame(self.notebook)
         self.notebook.add(self.update_frame, text="数据更新")
+
+        # 网页搜索标签页
+        self.web_search_frame = WebSearchFrame(self.notebook)
+        self.notebook.add(self.web_search_frame, text="官网搜索")
 
         # 设置窗口大小和位置
         self.root.geometry("800x600")

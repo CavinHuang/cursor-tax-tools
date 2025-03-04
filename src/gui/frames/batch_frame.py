@@ -1,11 +1,12 @@
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, messagebox
 import logging
 from typing import Dict, List
 from ...core.db.tariff_db import TariffDB
 import queue
 import threading
 from datetime import datetime
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,15 @@ class BatchFrame(ttk.Frame):
             command=self.start_process
         )
         self.process_btn.pack(side=tk.LEFT, padx=5, pady=5)
+
+        # 添加导出按钮
+        self.export_btn = ttk.Button(
+            file_frame,
+            text="导出结果",
+            command=self.export_results,
+            state='disabled'
+        )
+        self.export_btn.pack(side=tk.LEFT, padx=5, pady=5)
 
         # 进度框架
         progress_frame = ttk.LabelFrame(self, text="处理进度")
@@ -165,3 +175,36 @@ class BatchFrame(ttk.Frame):
         """添加日志"""
         self.log_text.insert(tk.END, f"{message}\n")
         self.log_text.see(tk.END)
+
+    def export_results(self):
+        """导出查询结果"""
+        filename = filedialog.asksaveasfilename(
+            title="保存结果",
+            filetypes=[
+                ("Excel文件", "*.xlsx"),
+                ("所有文件", "*.*")
+            ],
+            defaultextension=".xlsx"
+        )
+        if filename:
+            try:
+                # 获取所有结果
+                results = []
+                for item in self.result_tree.get_children():
+                    values = self.result_tree.item(item)['values']
+                    results.append({
+                        '商品编码': values[0],
+                        '商品描述': values[1],
+                        '英国税率': values[2],
+                        '北爱税率': values[3]
+                    })
+
+                # 创建DataFrame并保存
+                df = pd.DataFrame(results)
+                df.to_excel(filename, index=False)
+                self.add_log(f"结果已导出到: {filename}")
+
+            except Exception as e:
+                logger.error(f"导出失败: {str(e)}")
+                self.add_log(f"导出失败: {str(e)}")
+                messagebox.showerror("错误", f"导出失败: {str(e)}")

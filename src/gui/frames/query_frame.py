@@ -99,6 +99,15 @@ class QueryFrame(ttk.Frame):
         )
         status_bar.pack(fill=tk.X, padx=5, pady=2)
 
+        # 添加右键菜单
+        self.context_menu = tk.Menu(self, tearoff=0)
+        self.context_menu.add_command(label="复制编码", command=self.copy_code)
+        self.context_menu.add_command(label="复制税率", command=self.copy_rate)
+        self.context_menu.add_command(label="复制描述", command=self.copy_description)
+
+        # 绑定右键菜单
+        self.result_tree.bind('<Button-3>', self.show_context_menu)
+
         # 绑定事件
         self.result_tree.bind('<Double-1>', self.on_double_click)
         search_entry.bind('<Return>', lambda e: self.search())
@@ -152,3 +161,38 @@ class QueryFrame(ttk.Frame):
         except Exception as e:
             logger.error(f"打开URL失败: {str(e)}")
             messagebox.showerror("错误", f"打开URL失败: {str(e)}")
+
+    def show_context_menu(self, event):
+        """显示右键菜单"""
+        try:
+            item = self.result_tree.identify_row(event.y)
+            if item:
+                self.result_tree.selection_set(item)
+                self.context_menu.post(event.x_root, event.y_root)
+        finally:
+            self.context_menu.grab_release()
+
+    def copy_code(self):
+        """复制商品编码"""
+        if selected := self.result_tree.selection():
+            code = self.result_tree.item(selected[0])['values'][0]
+            self.clipboard_clear()
+            self.clipboard_append(code)
+            self.status_var.set("已复制商品编码")
+
+    def copy_rate(self):
+        """复制税率"""
+        if selected := self.result_tree.selection():
+            values = self.result_tree.item(selected[0])['values']
+            rate = f"英国: {values[2]}, 北爱: {values[3]}"
+            self.clipboard_clear()
+            self.clipboard_append(rate)
+            self.status_var.set("已复制税率")
+
+    def copy_description(self):
+        """复制商品描述"""
+        if selected := self.result_tree.selection():
+            desc = self.result_tree.item(selected[0])['values'][1]
+            self.clipboard_clear()
+            self.clipboard_append(desc)
+            self.status_var.set("已复制商品描述")

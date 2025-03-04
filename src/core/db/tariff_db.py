@@ -45,6 +45,14 @@ class TariffDB:
                     )
                 """)
 
+                # 配置表
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS config (
+                        key TEXT PRIMARY KEY,
+                        value TEXT
+                    )
+                """)
+
                 # 创建索引
                 self.conn.execute("CREATE INDEX IF NOT EXISTS idx_code ON tariffs(code)")
                 self.conn.execute("CREATE INDEX IF NOT EXISTS idx_error_code ON scrape_errors(code)")
@@ -169,3 +177,29 @@ class TariffDB:
         except Exception as e:
             logger.error(f"搜索关税信息失败: {str(e)}")
             return []
+
+    def save_config(self, key: str, value: str):
+        """保存配置"""
+        try:
+            with self.conn:
+                self.conn.execute("""
+                    INSERT OR REPLACE INTO config (key, value)
+                    VALUES (?, ?)
+                """, (key, value))
+        except Exception as e:
+            logger.error(f"保存配置失败: {str(e)}")
+
+    def get_config(self, key: str, default: str = "") -> str:
+        """获取配置"""
+        try:
+            with self.conn:
+                cursor = self.conn.execute(
+                    "SELECT value FROM config WHERE key = ?",
+                    (key,)
+                )
+                if row := cursor.fetchone():
+                    return row[0]
+                return default
+        except Exception as e:
+            logger.error(f"获取配置失败: {str(e)}")
+            return default
