@@ -135,3 +135,37 @@ class TariffDB:
         if hasattr(self._local, 'conn'):
             self._local.conn.close()
             del self._local.conn
+
+    def search_tariffs(self, code: str, fuzzy: bool = False) -> List[Dict]:
+        """搜索关税信息"""
+        try:
+            with self.conn:
+                if fuzzy:
+                    # 模糊搜索
+                    cursor = self.conn.execute("""
+                        SELECT code, description, rate, north_ireland_rate
+                        FROM tariffs
+                        WHERE code LIKE ?
+                        OR description LIKE ?
+                        ORDER BY code
+                    """, (f"%{code}%", f"%{code}%"))
+                else:
+                    # 精确搜索
+                    cursor = self.conn.execute("""
+                        SELECT code, description, rate, north_ireland_rate
+                        FROM tariffs
+                        WHERE code = ?
+                    """, (code,))
+
+                return [
+                    {
+                        'code': row[0],
+                        'description': row[1],
+                        'rate': row[2],
+                        'north_ireland_rate': row[3]
+                    }
+                    for row in cursor.fetchall()
+                ]
+        except Exception as e:
+            logger.error(f"搜索关税信息失败: {str(e)}")
+            return []

@@ -4,8 +4,8 @@ import logging
 import queue
 import threading
 import asyncio
-from ...core.scraper.uk_scraper import UKScraper
-from ...core.scraper.ni_scraper import NIScraper
+from src.core.scraper.uk_scraper import UKScraper
+from src.core.scraper.ni_scraper import NIScraper
 import tkinter.messagebox as messagebox
 from typing import List
 from datetime import datetime
