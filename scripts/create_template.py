@@ -2,6 +2,9 @@ import pandas as pd
 import os
 import sys
 
+current_dir = os.path.dirname(os.path.abspath(__file__))
+template_dir = os.path.join(current_dir, '..', 'datas', 'templates')
+
 def create_template():
     """创建批量查询的Excel模板文件"""
     try:
@@ -14,10 +17,10 @@ def create_template():
         df = pd.DataFrame(data)
 
         # 确保目录存在
-        os.makedirs('templates', exist_ok=True)
+        os.makedirs(template_dir, exist_ok=True)
 
         # 保存为Excel文件
-        template_path = 'templates/batch_rate_template.xlsx'
+        template_path = os.path.join(template_dir, 'batch_rate_template.xlsx')
         df.to_excel(template_path, index=False)
 
         # 使用ASCII字符输出

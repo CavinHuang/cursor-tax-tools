@@ -16,7 +16,9 @@ class BatchFrame(ttk.Frame):
         super().__init__(master)
         # 确保输出目录存在
         self.output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "datas", "output")
+        self.template_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "datas", "templates")
         os.makedirs(self.output_dir, exist_ok=True)
+        os.makedirs(self.template_dir, exist_ok=True)
 
         self.setup_ui()
         self.setup_queue()
@@ -61,6 +63,14 @@ class BatchFrame(ttk.Frame):
             state='disabled'
         )
         self.export_btn.pack(side=tk.LEFT, padx=5, pady=5)
+
+        # 添加下载模板按钮
+        self.template_btn = ttk.Button(
+            file_frame,
+            text="下载模板",
+            command=self.download_template
+        )
+        self.template_btn.pack(side=tk.LEFT, padx=5, pady=5)
 
         # 进度框架
         progress_frame = ttk.LabelFrame(self, text="处理进度")
@@ -146,10 +156,12 @@ class BatchFrame(ttk.Frame):
             filetypes=[
                 ("Excel文件", "*.xlsx;*.xls"),
                 ("所有文件", "*.*")
-            ]
+            ],
+            initialdir=os.path.expanduser("~")  # 从用户主目录开始
         )
         if filename:
             self.file_path.set(filename)
+            self.add_log(f"已选择文件: {filename}")
 
     def start_process(self):
         """开始处理"""
@@ -216,6 +228,7 @@ class BatchFrame(ttk.Frame):
 
             # 保存结果
             result_df = pd.DataFrame(results)
+            os.makedirs(os.path.dirname(output_file), exist_ok=True)  # 确保输出目录存在
             result_df.to_excel(output_file, index=False)
 
             # 更新界面
@@ -223,10 +236,12 @@ class BatchFrame(ttk.Frame):
             self.queue.put((self.add_log, (f"结果已保存到: {output_file}",), {}))
             self.queue.put((self.process_btn.configure, (), {'state': 'normal'}))
             self.queue.put((self.browse_btn.configure, (), {'state': 'normal'}))
+            self.queue.put((self.export_btn.configure, (), {'state': 'normal'}))  # 启用导出按钮
 
         except Exception as e:
-            logger.error(f"处理文件失败: {str(e)}")
-            self.queue.put((self.add_log, (f"处理失败: {str(e)}",), {}))
+            error_msg = f"处理文件失败: {str(e)}"
+            logger.error(error_msg)
+            self.queue.put((self.add_log, (error_msg,), {}))
             self.queue.put((self.status_var.set, ("处理失败",), {}))
             self.queue.put((self.process_btn.configure, (), {'state': 'normal'}))
             self.queue.put((self.browse_btn.configure, (), {'state': 'normal'}))
@@ -271,12 +286,30 @@ class BatchFrame(ttk.Frame):
 
     def download_template(self):
         """下载Excel模板文件"""
-        template_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "datas", "templates")
-        os.makedirs(template_dir, exist_ok=True)
-        template_path = os.path.join(template_dir, "batch_rate_template.xlsx")
+        template_path = os.path.join(self.template_dir, "batch_rate_template.xlsx")
 
-        if not os.path.exists(template_path):
-            # 创建新的模板文件
-            df = pd.DataFrame(columns=['code', 'description'])
-            df.to_excel(template_path, index=False)
-            logger.info(f"创建新的模板文件: {template_path}")
+        try:
+            # 打开文件保存对话框
+            save_path = filedialog.asksaveasfilename(
+                defaultextension=".xlsx",
+                filetypes=[("Excel files", "*.xlsx")],
+                initialfile="batch_rate_template.xlsx"
+            )
+
+            if save_path:
+                if not os.path.exists(template_path):
+                    # 如果模板不存在，创建新的模板
+                    df = pd.DataFrame(columns=['code', 'description'])
+                    df.to_excel(template_path, index=False)
+                    logger.info(f"创建新的模板文件: {template_path}")
+
+                # 复制模板文件到选择的位置
+                import shutil
+                shutil.copy2(template_path, save_path)
+                messagebox.showinfo("成功", f"模板已保存到: {save_path}")
+                self.add_log(f"模板已下载到: {save_path}")
+        except Exception as e:
+            error_msg = f"下载模板失败: {str(e)}"
+            logger.error(error_msg)
+            messagebox.showerror("错误", error_msg)
+            self.add_log(error_msg)
