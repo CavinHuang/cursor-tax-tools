@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import logging
 from typing import List, Dict, Optional
@@ -7,10 +8,17 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 class TariffDB:
-    def __init__(self, db_path: str = "tariffs.db"):
-        self.db_path = db_path
+    def __init__(self, db_name: str = "tariffs.db"):
+        # 确保 datas 目录存在
+        self.data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "datas")
+        os.makedirs(self.data_dir, exist_ok=True)
+
+        # 设置数据库文件路径
+        self.db_path = os.path.join(self.data_dir, db_name)
         self._local = threading.local()
         self._create_tables()
+
+        logger.info(f"数据库路径: {self.db_path}")
 
     @property
     def conn(self):

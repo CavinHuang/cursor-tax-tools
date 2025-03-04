@@ -7,12 +7,17 @@ import queue
 import threading
 from datetime import datetime
 import pandas as pd
+import os
 
 logger = logging.getLogger(__name__)
 
 class BatchFrame(ttk.Frame):
     def __init__(self, master):
         super().__init__(master)
+        # 确保输出目录存在
+        self.output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "datas", "output")
+        os.makedirs(self.output_dir, exist_ok=True)
+
         self.setup_ui()
         self.setup_queue()
         self.db = TariffDB()
@@ -168,8 +173,63 @@ class BatchFrame(ttk.Frame):
 
     def _process_file(self):
         """在后台线程中处理文件"""
-        # ... 文件处理逻辑 ...
-        pass
+        try:
+            # 读取Excel文件
+            df = pd.read_excel(self.file_path.get(), dtype={'code': str})
+            total = len(df)
+
+            # 创建输出文件名
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            output_file = os.path.join(
+                self.output_dir,
+                f"processed_{timestamp}_{os.path.basename(self.file_path.get())}"
+            )
+
+            # 处理每一行
+            results = []
+            for index, row in df.iterrows():
+                # 更新进度
+                progress = (index + 1) / total * 100
+                self.queue.put((self.progress_var.set, (progress,), {}))
+                self.queue.put((self.status_var.set, (f"正在处理: {index+1}/{total}",), {}))
+
+                # 查询数据
+                code = str(row['code']).strip()
+                result = self.db.search_tariffs(code)
+
+                if result:
+                    results.append({
+                        'code': code,
+                        'description': result[0]['description'],
+                        'rate': result[0]['rate'],
+                        'north_ireland_rate': result[0]['north_ireland_rate']
+                    })
+                else:
+                    results.append({
+                        'code': code,
+                        'description': '未找到',
+                        'rate': '',
+                        'north_ireland_rate': ''
+                    })
+
+                self.queue.put((self.add_log, (f"处理完成: {code}",), {}))
+
+            # 保存结果
+            result_df = pd.DataFrame(results)
+            result_df.to_excel(output_file, index=False)
+
+            # 更新界面
+            self.queue.put((self.status_var.set, ("处理完成",), {}))
+            self.queue.put((self.add_log, (f"结果已保存到: {output_file}",), {}))
+            self.queue.put((self.process_btn.configure, (), {'state': 'normal'}))
+            self.queue.put((self.browse_btn.configure, (), {'state': 'normal'}))
+
+        except Exception as e:
+            logger.error(f"处理文件失败: {str(e)}")
+            self.queue.put((self.add_log, (f"处理失败: {str(e)}",), {}))
+            self.queue.put((self.status_var.set, ("处理失败",), {}))
+            self.queue.put((self.process_btn.configure, (), {'state': 'normal'}))
+            self.queue.put((self.browse_btn.configure, (), {'state': 'normal'}))
 
     def add_log(self, message: str):
         """添加日志"""
@@ -208,3 +268,15 @@ class BatchFrame(ttk.Frame):
                 logger.error(f"导出失败: {str(e)}")
                 self.add_log(f"导出失败: {str(e)}")
                 messagebox.showerror("错误", f"导出失败: {str(e)}")
+
+    def download_template(self):
+        """下载Excel模板文件"""
+        template_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "datas", "templates")
+        os.makedirs(template_dir, exist_ok=True)
+        template_path = os.path.join(template_dir, "batch_rate_template.xlsx")
+
+        if not os.path.exists(template_path):
+            # 创建新的模板文件
+            df = pd.DataFrame(columns=['code', 'description'])
+            df.to_excel(template_path, index=False)
+            logger.info(f"创建新的模板文件: {template_path}")

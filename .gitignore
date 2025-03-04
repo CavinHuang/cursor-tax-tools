@@ -50,6 +50,13 @@ ehthumbs.db
 Desktop.ini
 
 # Project specific
-output/
-app.ico
-templates/
+# output/
+# app.ico
+# templates/
+
+# Data files
+datas/*
+!datas/.gitkeep
+!datas/templates/
+datas/templates/*
+!datas/templates/batch_rate_template.xlsx
