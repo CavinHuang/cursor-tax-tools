@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class TariffGUI:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("关税查询工具")
+        self.root.title("英国关税查询工具")
         self.setup_ui()
 
     def setup_ui(self):
@@ -22,7 +22,7 @@ class TariffGUI:
 
         # 查询页面
         self.query_frame = QueryFrame(self.notebook)
-        self.notebook.add(self.query_frame, text="商品查询")
+        self.notebook.add(self.query_frame, text="关税查询")
 
         # 批量查询标签页
         self.batch_frame = BatchFrame(self.notebook)

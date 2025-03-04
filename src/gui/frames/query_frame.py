@@ -16,7 +16,7 @@ class QueryFrame(ttk.Frame):
     def setup_ui(self):
         """设置UI界面"""
         # 搜索框架
-        search_frame = ttk.LabelFrame(self, text="商品编码查询")
+        search_frame = ttk.LabelFrame(self, text="关税编码查询")
         search_frame.pack(fill=tk.X, padx=5, pady=5)
 
         # 搜索输入框
@@ -57,7 +57,7 @@ class QueryFrame(ttk.Frame):
         result_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
         # 结果列表
-        columns = ('编码', '描述', '英国税率', '北爱税率')
+        columns = ('编码', '商品描述', '英国税率', '北爱税率')
         self.result_tree = ttk.Treeview(
             result_frame,
             columns=columns,
@@ -68,7 +68,7 @@ class QueryFrame(ttk.Frame):
         # 设置列
         column_widths = {
             '编码': 100,
-            '描述': 300,
+            '商品描述': 300,
             '英国税率': 100,
             '北爱税率': 100
         }
