@@ -34,13 +34,15 @@ class NIScraper(BaseScraper):
 
                     try:
                         if content:
-                            tariff_data = self.parse_commodity_page(content)
+                            url = f"{self.base_url}{self.format_commodity_code(code)}"
+                            tariff_data = self.parse_commodity_page(content, url)
                             if tariff_data:
                                 self.db.update_north_ireland_tariff(
                                     code,
                                     tariff_data['rate'],
                                     tariff_data['url']
                                 )
+                                return True
                             else:
                                 raise Exception("解析页面失败")
                         else:

@@ -73,18 +73,41 @@ class TariffDB:
         """更新英国关税信息"""
         try:
             with self.conn:
-                self.conn.execute("""
-                    INSERT OR REPLACE INTO tariffs
-                    (code, description, rate, url, updated_at)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (code, description, rate, url, datetime.now()))
+                # 先检查记录是否存在
+                cursor = self.conn.execute(
+                    "SELECT code FROM tariffs WHERE code = ?",
+                    (code,)
+                )
+                if cursor.fetchone():
+                    # 更新现有记录
+                    self.conn.execute("""
+                        UPDATE tariffs
+                        SET description = ?,
+                            rate = ?,
+                            url = ?,
+                            updated_at = ?
+                        WHERE code = ?
+                    """, (description, rate, url, datetime.now(), code))
+                else:
+                    # 插入新记录
+                    self.conn.execute("""
+                        INSERT INTO tariffs
+                        (code, description, rate, url, updated_at)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (code, description, rate, url, datetime.now()))
+
+                # 清除错误记录（如果存在）
+                self.clear_scrape_error(code)
+
         except Exception as e:
             logger.error(f"更新英国关税失败: {str(e)}")
+            raise
 
     def update_north_ireland_tariff(self, code: str, rate: str, url: str):
         """更新北爱尔兰关税信息"""
         try:
             with self.conn:
+                # 更新北爱尔兰关税信息
                 self.conn.execute("""
                     UPDATE tariffs
                     SET north_ireland_rate = ?,
@@ -92,8 +115,13 @@ class TariffDB:
                         updated_at = ?
                     WHERE code = ?
                 """, (rate, url, datetime.now(), code))
+
+                # 清除错误记录（如果存在）
+                self.clear_scrape_error(code)
+
         except Exception as e:
             logger.error(f"更新北爱尔兰关税失败: {str(e)}")
+            raise
 
     def get_all_codes(self) -> List[str]:
         """获取所有商品编码"""

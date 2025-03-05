@@ -37,7 +37,8 @@ class UKScraper(BaseScraper):
 
                     try:
                         if content:
-                            tariff_data = self.parse_commodity_page(content)
+                            url = f"{self.base_url}{self.format_commodity_code(code)}"
+                            tariff_data = self.parse_commodity_page(content, url)
                             if tariff_data:
                                 self.db.update_uk_tariff(
                                     code,

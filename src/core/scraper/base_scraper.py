@@ -87,7 +87,7 @@ class BaseScraper:
             logger.error(f"URL处理失败: {str(e)}")
             return [""] * len(urls)
 
-    def parse_commodity_page(self, html_content: str) -> Optional[Dict]:
+    def parse_commodity_page(self, html_content: str, url: str = '') -> Optional[Dict]:
         """解析商品页面"""
         try:
             if not html_content:
@@ -106,8 +106,13 @@ class BaseScraper:
             else:
                 logger.warning("未找到商品描述")
 
-            # 查找税率表格 class govuk-table或者duty-rates
-            duty_table = soup.find('table', {'class': ['govuk-table', 'duty-rates']})
+            # 查找税率表格 #import_duties的兄弟 class govuk-table或者duty-rates
+            import_duties = soup.find('h3', {'id': 'import_duties'})
+            print(import_duties)
+            if import_duties:
+                duty_table = import_duties.find_next_sibling('table', {'class': ['govuk-table', 'duty-rates']})
+            else:
+                duty_table = soup.find('table', {'class': ['govuk-table', 'duty-rates']})
             if not duty_table:
                 logger.error("未找到税率表格")
                 return None
@@ -117,7 +122,7 @@ class BaseScraper:
             for row in duty_table.find_all('tr'):
                 cells = row.find_all('td')
                 if cells and 'All countries' in cells[0].get_text():
-                    rate = cells[1].get_text().strip()
+                    rate = cells[2].get_text().strip()
                     logger.debug(f"找到税率: {rate}")
                     break
 
@@ -128,7 +133,7 @@ class BaseScraper:
             result = {
                 'description': description,
                 'rate': rate,
-                'url': str(soup.url) if hasattr(soup, 'url') else ''
+                'url': url  # 使用传入的URL
             }
             logger.debug(f"解析结果: {result}")
             return result

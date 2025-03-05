@@ -29,43 +29,50 @@ class QueryFrame(ttk.Frame):
             foreground='blue',
             font=('微软雅黑', 9, 'underline')
         )
+        style.configure(
+            'Disabled.Link.TLabel',
+            foreground='gray',
+            font=('微软雅黑', 9)
+        )
 
         # 更新英国关税链接
-        uk_link = ttk.Label(
+        self.uk_link = ttk.Label(
             frame,
             text="更新英国",
             style='Link.TLabel',
-            cursor='hand2'  # 鼠标悬停时显示手型
+            cursor='hand2'
         )
-        uk_link.pack(side=tk.LEFT, padx=10)
+        self.uk_link.pack(side=tk.LEFT, padx=10)
 
         # 分隔符
         ttk.Label(frame, text="|").pack(side=tk.LEFT)
 
         # 更新北爱关税链接
-        ni_link = ttk.Label(
+        self.ni_link = ttk.Label(
             frame,
             text="更新北爱",
             style='Link.TLabel',
             cursor='hand2'
         )
-        ni_link.pack(side=tk.LEFT, padx=10)
+        self.ni_link.pack(side=tk.LEFT, padx=10)
 
-        # 绑定点击事件 - 直接使用 item_id
-        uk_link.bind('<Button-1>', lambda e, iid=item_id: self.update_uk_rate(iid))
-        ni_link.bind('<Button-1>', lambda e, iid=item_id: self.update_ni_rate(iid))
+        # 绑定点击事件
+        self.uk_link.bind('<Button-1>', lambda e, iid=item_id: self.on_update_click(e, iid, self.update_uk_rate))
+        self.ni_link.bind('<Button-1>', lambda e, iid=item_id: self.on_update_click(e, iid, self.update_ni_rate))
 
-        # 绑定鼠标悬停事件以改变颜色
+        # 绑定鼠标悬停事件
         def on_enter(event, label):
-            label.configure(foreground='#0066cc')
+            if not self.is_updating:
+                label.configure(foreground='#0066cc', cursor='hand2')
 
         def on_leave(event, label):
-            label.configure(foreground='blue')
+            if not self.is_updating:
+                label.configure(foreground='blue', cursor='hand2')
 
-        uk_link.bind('<Enter>', lambda e: on_enter(e, uk_link))
-        uk_link.bind('<Leave>', lambda e: on_leave(e, uk_link))
-        ni_link.bind('<Enter>', lambda e: on_enter(e, ni_link))
-        ni_link.bind('<Leave>', lambda e: on_leave(e, ni_link))
+        self.uk_link.bind('<Enter>', lambda e: on_enter(e, self.uk_link))
+        self.uk_link.bind('<Leave>', lambda e: on_leave(e, self.uk_link))
+        self.ni_link.bind('<Enter>', lambda e: on_enter(e, self.ni_link))
+        self.ni_link.bind('<Leave>', lambda e: on_leave(e, self.ni_link))
 
         return frame
 
@@ -185,15 +192,28 @@ class QueryFrame(ttk.Frame):
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.result_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # 状态栏
-        self.status_var = tk.StringVar(value="就绪")
-        status_bar = ttk.Label(
-            self,
-            textvariable=self.status_var,
-            relief=tk.SUNKEN,
-            anchor=tk.W
+        # 添加进度条框架
+        self.progress_frame = ttk.Frame(self)
+        self.progress_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        # 进度条
+        self.progress_var = tk.DoubleVar()
+        self.progress_bar = ttk.Progressbar(
+            self.progress_frame,
+            mode='determinate',
+            variable=self.progress_var
         )
-        status_bar.pack(fill=tk.X, padx=5, pady=2)
+
+        # 进度标签
+        self.progress_label = ttk.Label(self.progress_frame, text="")
+
+        # 状态标签
+        self.status_var = tk.StringVar()
+        self.status_label = ttk.Label(
+            self,
+            textvariable=self.status_var
+        )
+        self.status_label.pack(fill=tk.X, padx=5)
 
         # 修改右键菜单
         self.context_menu = tk.Menu(self, tearoff=0)
@@ -215,6 +235,22 @@ class QueryFrame(ttk.Frame):
         # 绑定事件
         self.result_tree.bind('<Double-1>', self.on_double_click)
         search_entry.bind('<Return>', lambda e: self.search())
+
+    def show_progress(self, show: bool = True):
+        """显示/隐藏进度条"""
+        if show:
+            self.progress_bar.pack(fill=tk.X, padx=5, pady=2)
+            self.progress_label.pack(fill=tk.X, padx=5)
+            self.progress_var.set(0)
+        else:
+            self.progress_bar.pack_forget()
+            self.progress_label.pack_forget()
+
+    def update_progress(self, progress: float, message: str = ""):
+        """更新进度条"""
+        self.progress_var.set(progress * 100)
+        if message:
+            self.progress_label.config(text=message)
 
     def search(self):
         """执行搜索"""
@@ -361,20 +397,39 @@ class QueryFrame(ttk.Frame):
     async def _do_update_uk_rate(self, code: str) -> bool:
         """执行英国关税更新"""
         scraper = UKScraper()
-        scraper.set_progress_callback(lambda p, c: None)  # 不需要进度回调
+        scraper.set_progress_callback(self.update_progress)
         scraper.set_log_callback(lambda m: self.status_var.set(m))
-        print(code)
-        print('============111')
-        # 将单个编码转换为列表
         return await scraper.update_tariffs([code])
 
     async def _do_update_ni_rate(self, code: str) -> bool:
         """执行北爱关税更新"""
         scraper = NIScraper()
-        scraper.set_progress_callback(lambda p, c: None)
+        scraper.set_progress_callback(self.update_progress)
         scraper.set_log_callback(lambda m: self.status_var.set(m))
-        # 将单个编码转换为列表
         return await scraper.update_tariffs([code])
+
+    def on_update_click(self, event, item_id, update_func):
+        """处理更新点击事件"""
+        if self.is_updating:
+            messagebox.showwarning("警告", "正在更新中，请稍候...")
+            return
+        update_func(item_id)
+
+    def disable_update_buttons(self):
+        """禁用所有更新按钮"""
+        for item in self.result_tree.get_children():
+            button_frame = self.result_tree.winfo_children()[int(item)]
+            for widget in button_frame.winfo_children():
+                if isinstance(widget, ttk.Label) and widget['text'] in ["更新英国", "更新北爱"]:
+                    widget.configure(style='Disabled.Link.TLabel', cursor='arrow')
+
+    def enable_update_buttons(self):
+        """启用所有更新按钮"""
+        for item in self.result_tree.get_children():
+            button_frame = self.result_tree.winfo_children()[int(item)]
+            for widget in button_frame.winfo_children():
+                if isinstance(widget, ttk.Label) and widget['text'] in ["更新英国", "更新北爱"]:
+                    widget.configure(style='Link.TLabel', cursor='hand2')
 
     def _update_in_thread(self, code: str, update_func):
         """在后台线程中执行更新"""
@@ -384,19 +439,23 @@ class QueryFrame(ttk.Frame):
 
         self.is_updating = True
         try:
+            # 禁用所有更新按钮
+            self.after(0, self.disable_update_buttons)
+            # 显示进度条
+            self.after(0, lambda: self.show_progress(True))
+
             # 创建新的事件循环
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
             # 执行更新
             success = loop.run_until_complete(update_func(code))
-
             loop.close()
 
             if success:
                 self.after(0, lambda: self.status_var.set("更新成功"))
-                # 刷新显示
-                self.after(0, self.search)
+                # 只更新当前编码的数据
+                self.after(0, lambda: self.refresh_item(code))
             else:
                 self.after(0, lambda: messagebox.showerror("错误", "更新失败"))
         except Exception as e:
@@ -404,6 +463,10 @@ class QueryFrame(ttk.Frame):
             self.after(0, lambda: messagebox.showerror("错误", f"更新失败: {str(e)}"))
         finally:
             self.is_updating = False
+            # 启用所有更新按钮
+            self.after(0, self.enable_update_buttons)
+            # 隐藏进度条
+            self.after(0, lambda: self.show_progress(False))
 
     def update_uk_rate(self, item_id):
         """更新英国关税"""
@@ -426,7 +489,7 @@ class QueryFrame(ttk.Frame):
         if not values:
             return
 
-        code = str(values[0])  # 确保编码是字符串
+        code = str(values[0]).zfill(10)  # 确保编码是字符串
         # 在后台线程中执行更新
         thread = threading.Thread(
             target=self._update_in_thread,
@@ -434,6 +497,28 @@ class QueryFrame(ttk.Frame):
             daemon=True
         )
         thread.start()
+
+    def refresh_item(self, code: str):
+        """刷新单个项目的数据"""
+        try:
+            # 查询最新数据
+            results = self.db.search_tariffs(code, fuzzy=False)
+            if not results:
+                return
+
+            # 查找并更新对应的项
+            for item in self.result_tree.get_children():
+                values = self.result_tree.item(item)['values']
+                if values and values[0] == code:
+                    self.result_tree.item(item, values=(
+                        str(results[0]['code']).zfill(10),
+                        results[0]['rate'],
+                        results[0]['north_ireland_rate'],
+                        ""
+                    ))
+                    break
+        except Exception as e:
+            logger.error(f"刷新数据失败: {str(e)}")
 
 # https://www.trade-tariff.service.gov.uk/commodities/0101210000
 # https://www.trade-tariff.service.gov.uk/commodities/0101210000
