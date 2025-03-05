@@ -186,7 +186,7 @@ class TariffDB:
                 if fuzzy:
                     # 模糊搜索
                     cursor = self.conn.execute("""
-                        SELECT code, description, rate, north_ireland_rate
+                        SELECT code, description, rate, north_ireland_rate, updated_at
                         FROM tariffs
                         WHERE code LIKE ?
                         OR description LIKE ?
@@ -195,7 +195,7 @@ class TariffDB:
                 else:
                     # 精确搜索
                     cursor = self.conn.execute("""
-                        SELECT code, description, rate, north_ireland_rate
+                        SELECT code, description, rate, north_ireland_rate, updated_at
                         FROM tariffs
                         WHERE code = ?
                     """, (code,))
@@ -205,7 +205,8 @@ class TariffDB:
                         'code': str(row[0]).zfill(10),  # 确保编码是10位字符串
                         'description': row[1],
                         'rate': row[2],
-                        'north_ireland_rate': row[3]
+                        'north_ireland_rate': row[3],
+                        'updated_at': row[4]  # 添加更新时间
                     }
                     for row in cursor.fetchall()
                 ]
