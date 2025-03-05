@@ -6,9 +6,12 @@ import threading
 import asyncio
 from src.core.scraper.uk_scraper import UKScraper
 from src.core.scraper.ni_scraper import NIScraper
+from src.core.db.tariff_db import TariffDB
 import tkinter.messagebox as messagebox
 from typing import List
 from datetime import datetime
+import os
+import shutil
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +22,10 @@ class UpdateFrame(ttk.Frame):
         self.setup_queue()
         self.is_updating = False
         self.last_update = None  # 保存上次更新状态
+        # 初始化数据库和爬虫实例
+        self.db = TariffDB()
+        self.uk_scraper = UKScraper()
+        self.ni_scraper = NIScraper()
 
     def setup_ui(self):
         """设置UI界面"""
@@ -235,68 +242,114 @@ class UpdateFrame(ttk.Frame):
         self.status_var.set("正在停止更新...")
         self.add_log("正在停止更新...")
 
+    async def _get_commodity_codes(self):
+        """获取所有商品编码"""
+        self.queue.put((
+            self.add_log,
+            ("开始获取所有商品编码...",),
+            {}
+        ))
+
+        # 使用英国爬虫获取编码
+        codes = await self.uk_scraper.get_all_commodity_codes()
+
+        self.queue.put((
+            self.add_log,
+            (f"找到 {len(codes)} 个商品编码",),
+            {}
+        ))
+
+        return codes
+
     def _update_data(self):
         """在后台线程中执行数据更新"""
+        backup_path = None
         try:
-            # 获取所有需要更新的商品编码
-            codes = []
-            if self.uk_var.get() or self.ni_var.get():
-                # 从数据库获取所有编码
-                codes = self.scraper.db.get_all_codes()
-                if not codes:
-                    # 如果数据库为空，尝试从错误记录中获取编码
-                    error_records = self.scraper.db.get_scrape_errors()
-                    codes = [record['code'] for record in error_records]
+            # 1. 备份当前数据库
+            self.queue.put((
+                self.add_log,
+                ("开始备份当前数据库...",),
+                {}
+            ))
 
-            if not codes:
+            db_path = self.db.db_path  # 使用 self.db 而不是 self.scraper.db
+            backup_path = f"{db_path}.backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+            try:
+                shutil.copy2(db_path, backup_path)
                 self.queue.put((
-                    messagebox.showwarning,
-                    ("提示", "没有找到需要更新的商品编码，请先添加商品。"),
+                    self.add_log,
+                    (f"数据库已备份到: {backup_path}",),
+                    {}
+                ))
+            except Exception as e:
+                logger.error(f"备份数据库失败: {str(e)}")
+                self.queue.put((
+                    self.add_log,
+                    (f"备份数据库失败: {str(e)}",),
                     {}
                 ))
                 return
 
+            # 2. 清空当前数据库
             self.queue.put((
                 self.add_log,
-                (f"找到 {len(codes)} 个商品需要更新",),
+                ("清空当前数据库...",),
                 {}
             ))
 
-            # 设置进度回调
-            def update_progress(progress, current_code=None):
+            try:
+                # 关闭当前连接
+                self.db.close()
+                # 删除数据库文件
+                os.remove(db_path)
+                # 重新创建数据库
+                self.db = TariffDB()
                 self.queue.put((
-                    self._update_progress,
-                    (progress, current_code),
+                    self.add_log,
+                    ("数据库已清空，准备获取最新数据",),
                     {}
                 ))
+            except Exception as e:
+                logger.error(f"清空数据库失败: {str(e)}")
+                self.queue.put((
+                    self.add_log,
+                    (f"清空数据库失败: {str(e)}",),
+                    {}
+                ))
+                return
 
-            if self.uk_var.get():
-                scraper = UKScraper()
-            else:
-                scraper = NIScraper()
-
-            # 设置回调函数
-            scraper.set_progress_callback(update_progress)
-            scraper.set_log_callback(self.add_log)
-            scraper.set_stop_check(lambda: not self.is_updating)
+            # 3. 从官网获取最新数据
+            self.queue.put((
+                self.add_log,
+                ("开始从官网获取最新数据...",),
+                {}
+            ))
 
             # 创建异步事件循环
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-            # 执行更新
-            success = True
-            if self.uk_var.get():
-                success &= loop.run_until_complete(scraper.update_tariffs(codes))
-            if self.ni_var.get():
-                success &= loop.run_until_complete(scraper.update_tariffs(codes))
+            try:
+                # 获取所有商品编码
+                codes = loop.run_until_complete(self._get_commodity_codes())
+                if not codes:
+                    raise Exception("未找到任何商品编码")
 
-            loop.close()
+                # 执行更新
+                success = True
+                if self.uk_var.get():
+                    success &= loop.run_until_complete(self.uk_scraper.update_tariffs(codes))
+                if self.ni_var.get():
+                    success &= loop.run_until_complete(self.ni_scraper.update_tariffs(codes))
 
-            if success:
-                self.queue.put((self._update_complete, (), {}))
-            else:
-                raise Exception("更新失败")
+                if success:
+                    self.queue.put((self._update_complete, (), {}))
+                else:
+                    raise Exception("更新失败")
+
+            finally:
+                loop.close()
 
         except Exception as e:
             logger.error(f"更新数据失败: {str(e)}")
@@ -305,6 +358,24 @@ class UpdateFrame(ttk.Frame):
                 (f"更新失败: {str(e)}",),
                 {}
             ))
+            # 如果更新失败且存在备份，尝试恢复
+            if backup_path and os.path.exists(backup_path):
+                try:
+                    self.db.close()
+                    shutil.copy2(backup_path, db_path)
+                    self.db = TariffDB()
+                    self.queue.put((
+                        self.add_log,
+                        ("更新失败，已恢复数据库备份",),
+                        {}
+                    ))
+                except Exception as restore_error:
+                    logger.error(f"恢复备份失败: {str(restore_error)}")
+                    self.queue.put((
+                        self.add_log,
+                        (f"恢复备份失败: {str(restore_error)}",),
+                        {}
+                    ))
         finally:
             self.is_updating = False
             self.queue.put((self._reset_update_ui, (), {}))
@@ -370,7 +441,7 @@ class UpdateFrame(ttk.Frame):
         if not codes:
             return
 
-        scraper = UKScraper() if self.uk_var.get() else NIScraper()
+        scraper = self.uk_scraper if self.uk_var.get() else self.ni_scraper
 
         # 设置回调函数
         scraper.set_progress_callback(lambda p, c: None)  # 不更新总进度

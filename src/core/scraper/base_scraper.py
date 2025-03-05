@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from typing import Dict, List, Optional
 from bs4 import BeautifulSoup
 from ...utils.web_scraper import scrape_urls
@@ -9,6 +10,9 @@ logger = logging.getLogger(__name__)
 
 class BaseScraper:
     def __init__(self):
+        self.base_url = "https://www.trade-tariff.service.gov.uk"
+        self.browse_url = f"{self.base_url}/browse"
+        self.visited_urls = set()
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
@@ -165,5 +169,173 @@ class BaseScraper:
 
         logger.warning("未找到'All countries'的税率，使用默认税率")
         return ""
+
+    def parse_section_links(self, html: str) -> List[str]:
+        """解析主页面获取section链接"""
+        soup = BeautifulSoup(html, 'html.parser')
+        links = []
+
+        # 查找section表格
+        section_table = soup.find('table', class_='tariff-table')
+        if not section_table:
+            logger.error("未找到section表格")
+            return links
+
+        # 查找所有section链接
+        for row in section_table.find_all('tr'):
+            link = row.find('a')
+            if link and link.get('href'):
+                href = link.get('href')
+                if href.startswith('/sections/'):
+                    full_url = f"{self.base_url}{href}"
+                    if full_url not in self.visited_urls:
+                        links.append(full_url)
+                        logger.debug(f"找到section链接: {full_url}")
+
+        logger.info(f"共找到 {len(links)} 个section链接")
+        return links
+
+    def parse_chapter_links(self, html: str) -> List[str]:
+        """解析section页面获取chapter链接"""
+        soup = BeautifulSoup(html, 'html.parser')
+        links = []
+
+        # 查找chapter表格
+        chapter_table = soup.find('table', class_='govuk-table')
+        if not chapter_table:
+            logger.debug("未找到chapter表格")
+            return links
+
+        # 查找所有chapter链接
+        for row in chapter_table.find_all('tr', class_='govuk-table__row'):
+            link = row.find('a')
+            if link and link.get('href'):
+                href = link.get('href')
+                if href.startswith('/chapters/'):
+                    full_url = f"{self.base_url}{href}"
+                    if full_url not in self.visited_urls:
+                        links.append(full_url)
+                        logger.debug(f"找到chapter链接: {full_url}")
+
+        logger.info(f"共找到 {len(links)} 个chapter链接")
+        return links
+
+    def parse_heading_links(self, html: str) -> List[str]:
+        """解析chapter页面获取heading链接"""
+        soup = BeautifulSoup(html, 'html.parser')
+        links = []
+
+        # 查找heading表格
+        tables = soup.find_all('table', class_='govuk-table')
+        for table in tables:
+            for row in table.find_all('tr', class_='govuk-table__row'):
+                link = row.find('a')
+                if link and link.get('href'):
+                    href = link.get('href')
+                    if href.startswith('/headings/'):
+                        full_url = f"{self.base_url}{href}"
+                        if full_url not in self.visited_urls:
+                            links.append(full_url)
+                            logger.debug(f"找到heading链接: {full_url}")
+
+        logger.info(f"共找到 {len(links)} 个heading链接")
+        return links
+
+    def parse_commodity_links(self, html: str) -> List[str]:
+        """解析heading页面获取commodity链接"""
+        soup = BeautifulSoup(html, 'html.parser')
+        links = []
+
+        # 查找所有commodity链接
+        for link in soup.find_all('a', href=True):
+            href = link.get('href')
+            if href and '/commodities/' in href:
+                full_url = f"{self.base_url}{href}"
+                if full_url not in self.visited_urls:
+                    links.append(full_url)
+                    logger.debug(f"找到commodity链接: {full_url}")
+
+        logger.info(f"共找到 {len(links)} 个commodity链接")
+        return links
+
+    async def get_all_commodity_codes(self) -> List[str]:
+        """获取所有商品编码"""
+        try:
+            # 1. 获取section列表
+            logger.info(f"开始抓取主页面: {self.browse_url}")
+            content = await self.scrape_with_retry([self.browse_url])
+            if not content or not content[0]:
+                logger.error("无法访问主页面")
+                return []
+
+            section_urls = self.parse_section_links(content[0])
+            if not section_urls:
+                logger.error("未找到任何section链接")
+                return []
+
+            # 2. 分批处理section
+            commodity_codes = []
+            batch_size = 10  # 每批处理10个
+            total_sections = len(section_urls)
+
+            for i in range(0, total_sections, batch_size):
+                if self.should_stop and self.should_stop():
+                    break
+
+                batch_urls = section_urls[i:i + batch_size]
+                logger.info(f"正在处理第 {i//batch_size + 1} 批section，共 {len(batch_urls)} 个")
+
+                section_contents = await self.scrape_with_retry(batch_urls)
+                chapter_urls = []
+                for content in section_contents:
+                    if content:
+                        urls = self.parse_chapter_links(content)
+                        chapter_urls.extend(urls)
+
+                # 3. 分批处理chapter
+                for j in range(0, len(chapter_urls), batch_size):
+                    chapter_batch = chapter_urls[j:j + batch_size]
+                    logger.info(f"正在处理第 {j//batch_size + 1} 批chapter，共 {len(chapter_batch)} 个")
+
+                    chapter_contents = await self.scrape_with_retry(chapter_batch)
+                    heading_urls = []
+                    for content in chapter_contents:
+                        if content:
+                            urls = self.parse_heading_links(content)
+                            heading_urls.extend(urls)
+
+                    # 4. 分批处理heading
+                    for k in range(0, len(heading_urls), batch_size):
+                        heading_batch = heading_urls[k:k + batch_size]
+                        logger.info(f"正在处理第 {k//batch_size + 1} 批heading，共 {len(heading_batch)} 个")
+
+                        heading_contents = await self.scrape_with_retry(heading_batch)
+                        commodity_urls = []
+                        for content in heading_contents:
+                            if content:
+                                urls = self.parse_commodity_links(content)
+                                commodity_urls.extend(urls)
+
+                        # 5. 从commodity URL中提取编码
+                        for url in commodity_urls:
+                            code_match = re.search(r'/commodities/(\d+)', url)
+                            if code_match:
+                                code = self.format_commodity_code(code_match.group(1))
+                                if code not in commodity_codes:
+                                    commodity_codes.append(code)
+                                    if self.log_callback:
+                                        self.log_callback(f"找到商品编码: {code}")
+
+                # 更新进度
+                progress = (i + batch_size) / total_sections
+                if self.progress_callback:
+                    self.progress_callback(progress, f"已找到 {len(commodity_codes)} 个编码")
+
+            logger.info(f"共找到 {len(commodity_codes)} 个商品编码")
+            return commodity_codes
+
+        except Exception as e:
+            logger.error(f"获取商品编码失败: {str(e)}")
+            return []
 
     # ... 共用方法 ...
