@@ -238,12 +238,31 @@ class UpdateFrame(ttk.Frame):
     def _update_data(self):
         """在后台线程中执行数据更新"""
         try:
-            if self.uk_var.get():
-                scraper = UKScraper()
-            else:
-                scraper = NIScraper()
+            # 获取所有需要更新的商品编码
+            codes = []
+            if self.uk_var.get() or self.ni_var.get():
+                # 从数据库获取所有编码
+                codes = self.scraper.db.get_all_codes()
+                if not codes:
+                    # 如果数据库为空，尝试从错误记录中获取编码
+                    error_records = self.scraper.db.get_scrape_errors()
+                    codes = [record['code'] for record in error_records]
 
-            # 设置回调函数
+            if not codes:
+                self.queue.put((
+                    messagebox.showwarning,
+                    ("提示", "没有找到需要更新的商品编码，请先添加商品。"),
+                    {}
+                ))
+                return
+
+            self.queue.put((
+                self.add_log,
+                (f"找到 {len(codes)} 个商品需要更新",),
+                {}
+            ))
+
+            # 设置进度回调
             def update_progress(progress, current_code=None):
                 self.queue.put((
                     self._update_progress,
@@ -251,6 +270,12 @@ class UpdateFrame(ttk.Frame):
                     {}
                 ))
 
+            if self.uk_var.get():
+                scraper = UKScraper()
+            else:
+                scraper = NIScraper()
+
+            # 设置回调函数
             scraper.set_progress_callback(update_progress)
             scraper.set_log_callback(self.add_log)
             scraper.set_stop_check(lambda: not self.is_updating)
@@ -262,9 +287,9 @@ class UpdateFrame(ttk.Frame):
             # 执行更新
             success = True
             if self.uk_var.get():
-                success &= loop.run_until_complete(scraper.update_tariffs([]))
+                success &= loop.run_until_complete(scraper.update_tariffs(codes))
             if self.ni_var.get():
-                success &= loop.run_until_complete(scraper.update_tariffs([]))
+                success &= loop.run_until_complete(scraper.update_tariffs(codes))
 
             loop.close()
 
