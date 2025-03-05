@@ -98,13 +98,8 @@ class BaseScraper:
             logger.debug(f"开始解析页面: {len(html_content)} 字节")
 
             # 获取商品描述
-            description = ""
-            desc_elem = soup.find('h1', {'class': 'commodity-description'})
-            if desc_elem:
-                description = desc_elem.get_text().strip()
-                logger.debug(f"找到商品描述: {description}")
-            else:
-                logger.warning("未找到商品描述")
+            description = self._parse_description(soup)
+            logger.debug(f"找到商品描述: {description}")
 
             # 查找税率表格 #import_duties的兄弟 class govuk-table或者duty-rates
             import_duties = soup.find('h3', {'id': 'import_duties'})
@@ -118,17 +113,7 @@ class BaseScraper:
                 return None
 
             # 查找"All countries"行的税率
-            rate = None
-            for row in duty_table.find_all('tr'):
-                cells = row.find_all('td')
-                if cells and 'All countries' in cells[0].get_text():
-                    rate = cells[2].get_text().strip()
-                    logger.debug(f"找到税率: {rate}")
-                    break
-
-            if not rate:
-                logger.error("未找到'All countries'的税率")
-                return None
+            rate = self._parse_rate(soup)
 
             result = {
                 'description': description,
@@ -142,5 +127,43 @@ class BaseScraper:
             logger.error(f"解析页面失败: {str(e)}")
             logger.debug(f"页面内容: {html_content[:200]}...")  # 记录部分页面内容以便调试
             return None
+
+    def _parse_description(self, soup):
+        """解析商品描述"""
+        # 尝试多种可能的选择器
+        selectors = [
+            'h1.commodity-description',
+            'h1.govuk-heading-l',
+            '.commodity-header h1',
+            '#content h1'
+        ]
+
+        for selector in selectors:
+            element = soup.select_one(selector)
+            if element:
+                return element.text.strip()
+
+        logger.warning("未找到商品描述，使用默认描述")
+        return "商品描述未找到"
+
+    def _parse_rate(self, soup):
+        """解析税率"""
+        # 尝试查找包含 "All countries" 的行
+        rows = soup.select('table tr')
+        for row in rows:
+            cells = row.select('td')
+            if not cells:
+                continue
+
+            # 检查是否包含 "All countries"
+            country_cell = cells[0].text.strip().lower()
+            if "all countries" in country_cell:
+                # 获取税率列
+                if len(cells) > 1:
+                    rate = cells[2].text.strip()
+                    return rate if rate else ""
+
+        logger.warning("未找到'All countries'的税率，使用默认税率")
+        return ""
 
     # ... 共用方法 ...

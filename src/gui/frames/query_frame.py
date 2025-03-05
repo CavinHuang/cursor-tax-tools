@@ -376,6 +376,8 @@ class QueryFrame(ttk.Frame):
             return
 
         self.is_updating = True
+        error_msg = None  # 添加局部变量存储错误信息
+
         try:
             # 禁用所有更新按钮
             self.after(0, self.disable_update_buttons)
@@ -397,8 +399,9 @@ class QueryFrame(ttk.Frame):
             else:
                 self.after(0, lambda: messagebox.showerror("错误", "更新失败"))
         except Exception as e:
-            logger.error(f"更新失败: {str(e)}")
-            self.after(0, lambda: messagebox.showerror("错误", f"更新失败: {str(e)}"))
+            error_msg = str(e)  # 保存错误信息
+            logger.error(f"更新失败: {error_msg}")
+            self.after(0, lambda: messagebox.showerror("错误", f"更新失败: {error_msg}"))
         finally:
             self.is_updating = False
             # 启用所有更新按钮
