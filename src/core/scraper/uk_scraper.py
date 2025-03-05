@@ -45,6 +45,7 @@ class UKScraper(BaseScraper):
                                     tariff_data['rate'],
                                     tariff_data['url']
                                 )
+                                return True
                             else:
                                 raise Exception("解析页面失败")
                         else:

@@ -364,7 +364,7 @@ class QueryFrame(ttk.Frame):
         scraper.set_progress_callback(lambda p, c: None)  # 不需要进度回调
         scraper.set_log_callback(lambda m: self.status_var.set(m))
         print(code)
-        print('============')
+        print('============111')
         # 将单个编码转换为列表
         return await scraper.update_tariffs([code])
 
@@ -436,4 +436,4 @@ class QueryFrame(ttk.Frame):
         thread.start()
 
 # https://www.trade-tariff.service.gov.uk/commodities/0101210000
-# https://www.trade-tariff.service.gov.uk/commodities/101210000
+# https://www.trade-tariff.service.gov.uk/commodities/0101210000

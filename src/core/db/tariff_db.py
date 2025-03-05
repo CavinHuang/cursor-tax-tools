@@ -49,7 +49,7 @@ class TariffDB:
                     CREATE TABLE IF NOT EXISTS scrape_errors (
                         code TEXT PRIMARY KEY,
                         error_message TEXT,
-                        last_attempt TIMESTAMP
+                        last_attempt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
 
@@ -110,10 +110,9 @@ class TariffDB:
         try:
             with self.conn:
                 self.conn.execute("""
-                    INSERT OR REPLACE INTO scrape_errors
-                    (code, error_message, last_attempt)
-                    VALUES (?, ?, ?)
-                """, (code, error_message, datetime.now()))
+                    INSERT OR REPLACE INTO scrape_errors (code, error_message, last_attempt)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                """, (code, error_message))
         except Exception as e:
             logger.error(f"添加错误记录失败: {str(e)}")
 

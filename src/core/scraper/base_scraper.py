@@ -90,17 +90,26 @@ class BaseScraper:
     def parse_commodity_page(self, html_content: str) -> Optional[Dict]:
         """解析商品页面"""
         try:
+            if not html_content:
+                logger.error("页面内容为空")
+                return None
+
             soup = BeautifulSoup(html_content, 'html.parser')
+            logger.debug(f"开始解析页面: {len(html_content)} 字节")
 
             # 获取商品描述
             description = ""
             desc_elem = soup.find('h1', {'class': 'commodity-description'})
             if desc_elem:
                 description = desc_elem.get_text().strip()
+                logger.debug(f"找到商品描述: {description}")
+            else:
+                logger.warning("未找到商品描述")
 
-            # 查找税率表格
-            duty_table = soup.find('table', {'class': 'duty-rates'})
+            # 查找税率表格 class govuk-table或者duty-rates
+            duty_table = soup.find('table', {'class': ['govuk-table', 'duty-rates']})
             if not duty_table:
+                logger.error("未找到税率表格")
                 return None
 
             # 查找"All countries"行的税率
@@ -109,19 +118,24 @@ class BaseScraper:
                 cells = row.find_all('td')
                 if cells and 'All countries' in cells[0].get_text():
                     rate = cells[1].get_text().strip()
+                    logger.debug(f"找到税率: {rate}")
                     break
 
-            if rate:
-                return {
-                    'description': description,
-                    'rate': rate,
-                    'url': str(soup.url) if hasattr(soup, 'url') else ''
-                }
+            if not rate:
+                logger.error("未找到'All countries'的税率")
+                return None
 
-            return None
+            result = {
+                'description': description,
+                'rate': rate,
+                'url': str(soup.url) if hasattr(soup, 'url') else ''
+            }
+            logger.debug(f"解析结果: {result}")
+            return result
 
         except Exception as e:
             logger.error(f"解析页面失败: {str(e)}")
+            logger.debug(f"页面内容: {html_content[:200]}...")  # 记录部分页面内容以便调试
             return None
 
     # ... 共用方法 ...
