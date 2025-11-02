@@ -1,13 +1,132 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
+from typing import Dict
 import logging
 from tariff_api import TariffAPI
+from tariff_db import TariffDB
 import queue
 import threading
 from batch_gui import BatchProcessFrame
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+
+class UpdateDialog:
+    """数据更新对话框"""
+
+    def __init__(self, parent, tariff_data: dict, on_save_callback=None):
+        self.parent = parent
+        self.tariff_data = tariff_data
+        self.on_save_callback = on_save_callback
+        self.result = None
+
+        # 创建对话框窗口
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("更新关税数据")
+        self.dialog.geometry("500x400")
+        self.dialog.resizable(False, False)
+
+        # 设置模态
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+
+        # 居中显示
+        self.dialog.geometry("+%d+%d" % (
+            parent.winfo_rootx() + 50,
+            parent.winfo_rooty() + 50
+        ))
+
+        self.setup_ui()
+
+    def setup_ui(self):
+        """设置对话框UI"""
+        # 主框架
+        main_frame = ttk.Frame(self.dialog, padding="20")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # 商品编码（只读）
+        ttk.Label(main_frame, text="商品编码:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        code_label = ttk.Label(main_frame, text=self.tariff_data['code'], font=('TkDefaultFont', 9, 'bold'))
+        code_label.grid(row=0, column=1, sticky=tk.W, padx=10, pady=5)
+
+        # 商品描述
+        ttk.Label(main_frame, text="商品描述:").grid(row=1, column=0, sticky=tk.NW, pady=5)
+        self.description_text = tk.Text(main_frame, width=40, height=4)
+        self.description_text.grid(row=1, column=1, sticky=tk.W, padx=10, pady=5)
+        self.description_text.insert('1.0', self.tariff_data.get('description', ''))
+
+        # 英国税率
+        ttk.Label(main_frame, text="英国税率:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.rate_var = tk.StringVar(value=self.tariff_data.get('rate', ''))
+        rate_entry = ttk.Entry(main_frame, textvariable=self.rate_var, width=30)
+        rate_entry.grid(row=2, column=1, sticky=tk.W, padx=10, pady=5)
+
+        # 英国税率网址
+        ttk.Label(main_frame, text="英国税率网址:").grid(row=3, column=0, sticky=tk.W, pady=5)
+        self.url_var = tk.StringVar(value=self.tariff_data.get('url', ''))
+        url_entry = ttk.Entry(main_frame, textvariable=self.url_var, width=30)
+        url_entry.grid(row=3, column=1, sticky=tk.W, padx=10, pady=5)
+
+        # 北爱尔兰税率
+        ttk.Label(main_frame, text="北爱尔兰税率:").grid(row=4, column=0, sticky=tk.W, pady=5)
+        self.ni_rate_var = tk.StringVar(value=self.tariff_data.get('north_ireland_rate', ''))
+        ni_rate_entry = ttk.Entry(main_frame, textvariable=self.ni_rate_var, width=30)
+        ni_rate_entry.grid(row=4, column=1, sticky=tk.W, padx=10, pady=5)
+
+        # 北爱尔兰税率网址
+        ttk.Label(main_frame, text="北爱尔兰税率网址:").grid(row=5, column=0, sticky=tk.W, pady=5)
+        self.ni_url_var = tk.StringVar(value=self.tariff_data.get('north_ireland_url', ''))
+        ni_url_entry = ttk.Entry(main_frame, textvariable=self.ni_url_var, width=30)
+        ni_url_entry.grid(row=5, column=1, sticky=tk.W, padx=10, pady=5)
+
+        # 按钮框架
+        button_frame = ttk.Frame(main_frame)
+        button_frame.grid(row=6, column=0, columnspan=2, pady=20)
+
+        # 保存按钮
+        save_btn = ttk.Button(button_frame, text="保存", command=self.save)
+        save_btn.pack(side=tk.LEFT, padx=5)
+
+        # 取消按钮
+        cancel_btn = ttk.Button(button_frame, text="取消", command=self.cancel)
+        cancel_btn.pack(side=tk.LEFT, padx=5)
+
+    def save(self):
+        """保存更新"""
+        try:
+            # 获取输入值
+            description = self.description_text.get('1.0', tk.END).strip()
+            rate = self.rate_var.get().strip()
+            url = self.url_var.get().strip()
+            ni_rate = self.ni_rate_var.get().strip()
+            ni_url = self.ni_url_var.get().strip()
+
+            # 构建结果
+            self.result = {
+                'code': self.tariff_data['code'],
+                'description': description if description else None,
+                'rate': rate if rate else None,
+                'url': url if url else None,
+                'north_ireland_rate': ni_rate if ni_rate else None,
+                'north_ireland_url': ni_url if ni_url else None
+            }
+
+            # 关闭对话框
+            self.dialog.destroy()
+
+            # 触发回调
+            if self.on_save_callback:
+                self.on_save_callback(self.result)
+
+        except Exception as e:
+            logger.error(f"保存更新失败: {str(e)}")
+            messagebox.showerror("错误", f"保存失败: {str(e)}")
+
+    def cancel(self):
+        """取消更新"""
+        self.dialog.destroy()
+
 
 class TariffGUI:
     def __init__(self):
@@ -70,7 +189,7 @@ class TariffGUI:
         result_frame = ttk.LabelFrame(self.single_frame, text="搜索结果")
         result_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # 创建表格
+        # 创建表格（注意：表格不显示description，但数据中包含它）
         columns = ('编码', '税率', '网址', '北爱尔兰税率', '北爱尔兰网址', '相似度')
         self.result_tree = ttk.Treeview(
             result_frame,
@@ -115,6 +234,9 @@ class TariffGUI:
         self.context_menu.add_separator()
         self.context_menu.add_command(label="复制北爱尔兰税率", command=self.copy_ni_rate)
         self.context_menu.add_command(label="打开北爱尔兰税率网址", command=self.open_ni_url)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="更新数据", command=self.update_data)
+        self.context_menu.add_command(label="自动更新", command=self.auto_update)
 
         # 绑定右键事件（同时支持 Windows 和 macOS）
         self.result_tree.bind('<Button-2>', self.show_context_menu)  # macOS 右键
@@ -135,6 +257,7 @@ class TariffGUI:
     def setup_api(self):
         """设置API"""
         self.api = TariffAPI()
+        self.db = TariffDB()
 
     def setup_queue(self):
         """设置消息队列和更新任务"""
@@ -318,6 +441,195 @@ class TariffGUI:
         if url and url.strip():
             import webbrowser
             webbrowser.open(url)
+
+    def update_data(self):
+        """更新选中行的数据"""
+        try:
+            # 获取选中的项目
+            selected_items = self.result_tree.selection()
+            if not selected_items:
+                messagebox.showwarning("警告", "请先选择要更新的数据")
+                return
+
+            item = selected_items[0]
+            values = self.result_tree.item(item)['values']
+
+            # 构建tariff数据
+            tariff_data = {
+                'code': values[0],
+                'description': '',  # 表格中不显示description，从数据库获取
+                'rate': values[1] if values[1] else None,
+                'url': values[2] if values[2] else None,
+                'north_ireland_rate': values[3] if values[3] else None,
+                'north_ireland_url': values[4] if values[4] else None
+            }
+
+            # 从数据库获取完整数据（包括description）
+            full_data = self.db.get_tariff(tariff_data['code'])
+            if full_data:
+                tariff_data.update(full_data)
+
+            # 显示更新对话框
+            dialog = UpdateDialog(self.root, tariff_data, on_save_callback=self._handle_update)
+
+        except IndexError:
+            messagebox.showwarning("警告", "请先选择要更新的数据")
+        except Exception as e:
+            logger.error(f"打开更新对话框失败: {str(e)}")
+            messagebox.showerror("错误", f"打开更新对话框失败: {str(e)}")
+
+    def _handle_update(self, updated_data):
+        """处理更新结果（在对话框关闭后调用）"""
+        def do_update():
+            try:
+                # 执行数据库更新
+                self.db.update_tariff(
+                    code=updated_data['code'],
+                    description=updated_data['description'],
+                    rate=updated_data['rate'],
+                    url=updated_data['url'],
+                    north_ireland_rate=updated_data['north_ireland_rate'],
+                    north_ireland_url=updated_data['north_ireland_url']
+                )
+
+                # 更新UI
+                self.queue.put((self._refresh_results, (), {}))
+
+                # 显示成功消息
+                self.queue.put((
+                    lambda: self.status_var.set(f"已更新商品编码 {updated_data['code']} 的数据"),
+                    (),
+                    {}
+                ))
+
+            except Exception as e:
+                logger.error(f"更新数据失败: {str(e)}")
+                self.queue.put((
+                    lambda: messagebox.showerror("错误", f"更新失败: {str(e)}"),
+                    (),
+                    {}
+                ))
+
+        # 在后台线程中执行更新
+        thread = threading.Thread(target=do_update, daemon=True)
+        thread.start()
+
+    def _refresh_results(self):
+        """刷新当前搜索结果"""
+        # 保持当前搜索查询
+        current_query = self.search_var.get().strip()
+        if current_query:
+            # 重新执行搜索
+            self._search(current_query)
+        else:
+            # 如果没有搜索查询，清空结果
+            for item in self.result_tree.get_children():
+                self.result_tree.delete(item)
+
+    def auto_update(self):
+        """自动更新选中行的数据"""
+        try:
+            # 获取选中的项目
+            selected_items = self.result_tree.selection()
+            if not selected_items:
+                messagebox.showwarning("警告", "请先选择要自动更新的数据")
+                return
+
+            item = selected_items[0]
+            values = self.result_tree.item(item)['values']
+
+            # 获取商品编码和税率网址
+            code = values[0]
+            uk_url = values[2]  # 英国网址在第3列
+            ni_url = values[4] if len(values) > 4 and values[4] else None  # 北爱尔兰网址在第5列
+
+            if not uk_url or not uk_url.strip():
+                messagebox.showwarning("警告", "该记录没有英国税率网址，无法进行自动更新")
+                return
+
+            # 确认对话框
+            if not messagebox.askyesno("确认自动更新",
+                                       f"将自动抓取商品编码 {code} 的最新税率数据并与当前数据对比，\n"
+                                       f"如有变化则更新。\n\n"
+                                       f"确认继续吗？"):
+                return
+
+            # 在后台线程中执行自动更新
+            thread = threading.Thread(
+                target=self._do_auto_update,
+                args=(code, uk_url, ni_url),
+                daemon=True
+            )
+            thread.start()
+
+            # 显示状态
+            self.status_var.set("正在自动更新...")
+
+        except IndexError:
+            messagebox.showwarning("警告", "请先选择要自动更新的数据")
+        except Exception as e:
+            logger.error(f"自动更新失败: {str(e)}")
+            messagebox.showerror("错误", f"自动更新失败: {str(e)}")
+
+    def _do_auto_update(self, code: str, uk_url: str, ni_url: str = None):
+        """在后台线程中执行自动更新"""
+        try:
+            # 执行自动更新
+            result = self.api.auto_update(code, uk_url, ni_url)
+
+            # 在主线程中处理结果
+            self.queue.put((self._handle_auto_update_result, (result, code), {}))
+
+        except Exception as e:
+            logger.error(f"后台自动更新失败: {str(e)}")
+            self.queue.put((
+                lambda: (self.status_var.set("自动更新失败"),
+                         messagebox.showerror("错误", f"自动更新失败: {str(e)}")),
+                (),
+                {}
+            ))
+
+    def _handle_auto_update_result(self, result: Dict, code: str):
+        """处理自动更新结果"""
+        try:
+            if result['success']:
+                if result['updated']:
+                    # 实际更新了数据
+                    self.status_var.set(f"自动更新成功: {result['message']}")
+
+                    # 刷新搜索结果
+                    self._refresh_results()
+
+                    # 显示详细信息对话框
+                    old_data = result['old_data']
+                    new_data = result['new_data']
+
+                    # 构建比较信息
+                    old_rate = old_data.get('rate', '(无)')
+                    new_rate = new_data.get('rate', '(无)')
+
+                    detail_msg = (f"商品编码: {code}\n"
+                                 f"\n"
+                                 f"原税率: {old_rate}\n"
+                                 f"新税率: {new_rate}\n"
+                                 f"\n"
+                                 f"{result['message']}")
+
+                    messagebox.showinfo("自动更新成功", detail_msg)
+
+                else:
+                    # 没有变化，不需要更新
+                    self.status_var.set("自动更新完成: " + result['message'])
+                    messagebox.showinfo("自动更新完成", result['message'])
+            else:
+                # 自动更新失败
+                self.status_var.set("自动更新失败")
+                messagebox.showerror("自动更新失败", result['message'])
+
+        except Exception as e:
+            logger.error(f"处理自动更新结果失败: {str(e)}")
+            self.status_var.set("处理自动更新结果时出错")
+            messagebox.showerror("错误", f"处理自动更新结果失败: {str(e)}")
 
     def run(self):
         """运行GUI"""

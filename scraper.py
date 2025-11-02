@@ -27,7 +27,7 @@ class TariffScraper:
         """带重试的抓取"""
         for retry in range(self.max_retries):
             try:
-                results = await scrape_urls(urls, headers=self.headers, timeout=self.timeout)
+                results = await scrape_urls(urls, headers=self.headers)
                 if any(results):  # 只要有一个成功就返回
                     return results
             except Exception as e:
@@ -141,8 +141,8 @@ class TariffScraper:
                 result['code'] = code
                 result['url'] = url or f"https://www.trade-tariff.service.gov.uk/commodities/{code}"
 
-            # 查找商品描述
-            desc_elem = soup.find('h1', class_='commodity-description')
+            # 查找商品描述（更新：使用正确的class名）
+            desc_elem = soup.find('h1', class_='commodity-header')
             if desc_elem:
                 result['description'] = desc_elem.text.strip()
                 logger.debug(f"找到商品描述: {result['description']}")
@@ -155,30 +155,39 @@ class TariffScraper:
 
             # 查找税率
             found_rate = False
-            duty_tables = soup.find_all('table', class_='govuk-table')
+            duty_tables = soup.find_all('table', class_='small-table')
             for table in duty_tables:
                 if found_rate:
                     break
 
                 headers = table.find_all('th')
-                country_idx = None
                 duty_rate_idx = None
 
+                # 查找"Duty rate"列的索引
                 for i, th in enumerate(headers):
                     header_text = th.text.strip()
-                    if "Country" in header_text:
-                        country_idx = i
-                    elif "Duty rate" in header_text:
+                    if "Duty rate" in header_text:
                         duty_rate_idx = i
+                        break
 
-                if country_idx is not None and duty_rate_idx is not None:
+                if duty_rate_idx is not None:
+                    # 查找包含"All countries"或"United Kingdom"的行
                     rows = table.find_all('tr')
                     for row in rows:
-                        cells = row.find_all('td')
-                        if cells and len(cells) > max(country_idx, duty_rate_idx):
-                            country = cells[country_idx].text.strip()
-                            if "All countries" in country:
-                                duty_rate = cells[duty_rate_idx].text.strip()
+                        cells = row.find_all(['td', 'th'])
+                        if cells and len(cells) > duty_rate_idx:
+                            country_cell = cells[0].get_text(strip=True)
+                            if "All countries" in country_cell or "United Kingdom" in country_cell:
+                                # 使用更精确的CSS选择器提取税率
+                                duty_rate_elem = cells[duty_rate_idx].find('span', class_='duty-expression')
+                                if duty_rate_elem:
+                                    # 找到嵌套的span中的税率值
+                                    rate_span = duty_rate_elem.find('span')
+                                    duty_rate = rate_span.get_text(strip=True) if rate_span else duty_rate_elem.get_text(strip=True)
+                                else:
+                                    # 备用方法：直接获取文本
+                                    duty_rate = cells[duty_rate_idx].get_text(strip=True)
+
                                 result['rate'] = duty_rate
                                 logger.debug(f"找到税率: {duty_rate}")
                                 found_rate = True
@@ -329,6 +338,145 @@ class TariffScraper:
         from tariff_db import TariffDB
         db = TariffDB()
         return db.get_record_count()
+
+    def auto_update_single(self, code: str, uk_url: str, ni_url: str = None) -> Dict:
+        """自动更新单个商品的税率信息（支持英国和北爱尔兰）
+
+        Args:
+            code: 商品编码
+            uk_url: 英国税率URL
+            ni_url: 北爱尔兰税率URL（可选）
+
+        Returns:
+            包含更新结果的字典：{
+                'success': bool,
+                'message': str,
+                'updated': bool,
+                'old_data': dict,
+                'new_data': dict
+            }
+        """
+        try:
+            # 获取当前数据
+            old_data = self.db.get_tariff(code)
+            if not old_data:
+                return {
+                    'success': False,
+                    'message': f'未找到商品编码 {code} 的记录',
+                    'updated': False,
+                    'old_data': None,
+                    'new_data': None
+                }
+
+            # 抓取新数据
+            # 临时保存现有的编码列表
+            saved_existing_codes = self.existing_codes.copy()
+            # 清空 existing_codes 以允许解析已存在的记录（用于自动更新）
+            self.existing_codes = set()
+            
+            async def fetch_uk_data():
+                """抓取并解析英国数据"""
+                content_list = await self.scrape_with_retry([uk_url])
+                content = content_list[0] if content_list else ""
+                if not content:
+                    return None
+                return self.parse_commodity_page(content, uk_url)
+            
+            async def fetch_ni_data():
+                """抓取并解析北爱尔兰数据"""
+                if not ni_url:
+                    return None
+                content_list = await self.scrape_with_retry([ni_url])
+                content = content_list[0] if content_list else ""
+                if not content:
+                    return None
+                return self.parse_commodity_page(content, ni_url)
+
+            # 使用asyncio.run执行异步操作
+            uk_data_parsed = asyncio.run(fetch_uk_data())
+            ni_data_parsed = asyncio.run(fetch_ni_data())
+            
+            # 恢复原有的 existing_codes
+            self.existing_codes = saved_existing_codes
+
+            if not uk_data_parsed:
+                return {
+                    'success': False,
+                    'message': '解析英国网页失败，无法获取税率信息',
+                    'updated': False,
+                    'old_data': old_data,
+                    'new_data': None
+                }
+
+            # 提取要更新的数据
+            new_uk_rate = uk_data_parsed.get('rate', '')
+            new_description = uk_data_parsed.get('description', '')
+            new_ni_rate = ni_data_parsed.get('rate', '') if ni_data_parsed else ''
+
+            # 对比税率是否变化（忽略大小写和空格）
+            old_uk_rate = old_data.get('rate', '') or ''
+            new_uk_rate_clean = new_uk_rate.strip().lower() if new_uk_rate else ''
+            old_uk_rate_clean = old_uk_rate.strip().lower() if old_uk_rate else ''
+            
+            old_ni_rate = old_data.get('north_ireland_rate', '') or ''
+            new_ni_rate_clean = new_ni_rate.strip().lower() if new_ni_rate else ''
+            old_ni_rate_clean = old_ni_rate.strip().lower() if old_ni_rate else ''
+
+            # 检查是否有变化
+            uk_rate_changed = new_uk_rate_clean != old_uk_rate_clean
+            ni_rate_changed = new_ni_rate_clean != old_ni_rate_clean
+            desc_changed = new_description and new_description != old_data.get('description', '')
+
+            if not uk_rate_changed and not ni_rate_changed and not desc_changed:
+                return {
+                    'success': True,
+                    'message': '英国税率、北爱尔兰税率和描述均无变化，无需更新',
+                    'updated': False,
+                    'old_data': old_data,
+                    'new_data': old_data
+                }
+
+            # 执行更新
+            update_data = {}
+            if uk_rate_changed:
+                update_data['rate'] = new_uk_rate
+            if ni_rate_changed:
+                update_data['north_ireland_rate'] = new_ni_rate
+            if desc_changed:
+                update_data['description'] = new_description
+
+            self.db.update_tariff(code=code, **update_data)
+
+            # 获取更新后的数据
+            updated_data = self.db.get_tariff(code)
+
+            # 构建消息
+            changed_parts = []
+            if uk_rate_changed:
+                changed_parts.append('英国税率')
+            if ni_rate_changed:
+                changed_parts.append('北爱尔兰税率')
+            if desc_changed:
+                changed_parts.append('描述')
+            
+            change_msg = '、'.join(changed_parts)
+            return {
+                'success': True,
+                'message': f'成功更新数据（{change_msg}）',
+                'updated': True,
+                'old_data': old_data,
+                'new_data': updated_data
+            }
+
+        except Exception as e:
+            logger.error(f"自动更新失败: {str(e)}")
+            return {
+                'success': False,
+                'message': f'自动更新失败: {str(e)}',
+                'updated': False,
+                'old_data': None,
+                'new_data': None
+            }
 
 async def main():
     scraper = TariffScraper()

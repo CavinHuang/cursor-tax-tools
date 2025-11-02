@@ -157,6 +157,44 @@ class TariffDB:
             logger.error(f"更新北爱尔兰关税记录失败: {str(e)}")
             raise
 
+    def update_tariff(self, code: str, description: str = None, rate: str = None, url: str = None,
+                      north_ireland_rate: str = None, north_ireland_url: str = None):
+        """更新关税记录（支持部分字段更新）"""
+        try:
+            # 构建动态更新SQL
+            updates = []
+            params = []
+
+            if description is not None:
+                updates.append("description = ?")
+                params.append(description)
+            if rate is not None:
+                updates.append("rate = ?")
+                params.append(rate)
+            if url is not None:
+                updates.append("url = ?")
+                params.append(url)
+            if north_ireland_rate is not None:
+                updates.append("north_ireland_rate = ?")
+                params.append(north_ireland_rate)
+            if north_ireland_url is not None:
+                updates.append("north_ireland_url = ?")
+                params.append(north_ireland_url)
+
+            if not updates:
+                logger.warning("没有提供任何要更新的字段")
+                return
+
+            params.append(code)  # WHERE条件
+
+            sql = f"UPDATE tariffs SET {', '.join(updates)} WHERE code = ?"
+            with self.conn:
+                self.conn.execute(sql, params)
+            logger.info(f"成功更新商品编码 {code} 的记录")
+        except Exception as e:
+            logger.error(f"更新关税记录失败: {str(e)}")
+            raise
+
     def add_scrape_error(self, code: str, error_message: str):
         """记录抓取错误"""
         try:

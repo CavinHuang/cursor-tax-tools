@@ -2,6 +2,7 @@ import logging
 import re
 from typing import List, Dict, Union, Optional
 from tariff_db import TariffDB
+from scraper import TariffScraper
 from Levenshtein import ratio
 
 logger = logging.getLogger(__name__)
@@ -142,3 +143,34 @@ class TariffAPI:
         except Exception as e:
             logger.error(f"获取编码列表失败: {str(e)}")
             return []
+
+    def auto_update(self, code: str, uk_url: str, ni_url: str = None) -> Dict:
+        """自动更新税率信息（支持英国和北爱尔兰）
+
+        Args:
+            code: 商品编码
+            uk_url: 英国税率URL
+            ni_url: 北爱尔兰税率URL（可选）
+
+        Returns:
+            包含更新结果的字典：{
+                'success': bool,
+                'message': str,
+                'updated': bool,  # 是否实际更新了数据
+                'old_data': dict,  # 更新前的数据
+                'new_data': dict   # 更新后的数据
+            }
+        """
+        try:
+            # 使用 TariffScraper 执行自动更新
+            scraper = TariffScraper()
+            return scraper.auto_update_single(code, uk_url, ni_url)
+        except Exception as e:
+            logger.error(f"自动更新失败: {str(e)}")
+            return {
+                'success': False,
+                'message': f'自动更新失败: {str(e)}',
+                'updated': False,
+                'old_data': None,
+                'new_data': None
+            }
