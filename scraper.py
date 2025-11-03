@@ -353,7 +353,9 @@ class TariffScraper:
                 'message': str,
                 'updated': bool,
                 'old_data': dict,
-                'new_data': dict
+                'new_data': dict,
+                'uk_success': bool,  # 英国数据是否获取成功
+                'ni_success': bool   # 北爱尔兰数据是否获取成功
             }
         """
         try:
@@ -365,47 +367,70 @@ class TariffScraper:
                     'message': f'未找到商品编码 {code} 的记录',
                     'updated': False,
                     'old_data': None,
-                    'new_data': None
+                    'new_data': None,
+                    'uk_success': False,
+                    'ni_success': False
                 }
 
-            # 抓取新数据
-            # 临时保存现有的编码列表
-            saved_existing_codes = self.existing_codes.copy()
-            # 清空 existing_codes 以允许解析已存在的记录（用于自动更新）
-            self.existing_codes = set()
-            
-            async def fetch_uk_data():
-                """抓取并解析英国数据"""
-                content_list = await self.scrape_with_retry([uk_url])
-                content = content_list[0] if content_list else ""
-                if not content:
-                    return None
-                return self.parse_commodity_page(content, uk_url)
-            
-            async def fetch_ni_data():
-                """抓取并解析北爱尔兰数据"""
-                if not ni_url:
-                    return None
-                content_list = await self.scrape_with_retry([ni_url])
-                content = content_list[0] if content_list else ""
-                if not content:
-                    return None
-                return self.parse_commodity_page(content, ni_url)
+            # 创建解析器实例避免修改全局状态
+            temp_parser = self._create_temp_parser()
 
-            # 使用asyncio.run执行异步操作
-            uk_data_parsed = asyncio.run(fetch_uk_data())
-            ni_data_parsed = asyncio.run(fetch_ni_data())
-            
-            # 恢复原有的 existing_codes
-            self.existing_codes = saved_existing_codes
+            async def fetch_all_data():
+                """并行抓取英国和北爱尔兰数据"""
+                async def fetch_uk_data():
+                    """抓取并解析英国数据"""
+                    try:
+                        content_list = await self.scrape_with_retry([uk_url])
+                        content = content_list[0] if content_list else ""
+                        if not content:
+                            return None, "英国网页内容为空"
+                        return temp_parser.parse_commodity_page(content, uk_url), None
+                    except Exception as e:
+                        return None, f"英国数据抓取失败: {str(e)}"
 
-            if not uk_data_parsed:
+                async def fetch_ni_data():
+                    """抓取并解析北爱尔兰数据"""
+                    if not ni_url:
+                        return None, "未提供北爱尔兰URL"
+                    try:
+                        content_list = await self.scrape_with_retry([ni_url])
+                        content = content_list[0] if content_list else ""
+                        if not content:
+                            return None, "北爱尔兰网页内容为空"
+                        return temp_parser.parse_commodity_page(content, ni_url), None
+                    except Exception as e:
+                        return None, f"北爱尔兰数据抓取失败: {str(e)}"
+
+                # 并行执行抓取任务
+                tasks = [fetch_uk_data()]
+                if ni_url:
+                    tasks.append(fetch_ni_data())
+
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                return results
+
+            # 执行并行抓取
+            fetch_results = asyncio.run(fetch_all_data())
+
+            # 解析结果
+            uk_result = fetch_results[0]
+            ni_result = fetch_results[1] if len(fetch_results) > 1 else (None, "未提供北爱尔兰URL")
+
+            uk_data_parsed, uk_error = uk_result if isinstance(uk_result, tuple) else (None, "英国数据解析异常")
+            ni_data_parsed, ni_error = ni_result if isinstance(ni_result, tuple) else (None, "北爱尔兰数据解析异常")
+
+            uk_success = uk_data_parsed is not None
+            ni_success = ni_data_parsed is not None
+
+            if not uk_success:
                 return {
                     'success': False,
-                    'message': '解析英国网页失败，无法获取税率信息',
+                    'message': f'{uk_error}',
                     'updated': False,
                     'old_data': old_data,
-                    'new_data': None
+                    'new_data': None,
+                    'uk_success': uk_success,
+                    'ni_success': ni_success
                 }
 
             # 提取要更新的数据
@@ -417,23 +442,34 @@ class TariffScraper:
             old_uk_rate = old_data.get('rate', '') or ''
             new_uk_rate_clean = new_uk_rate.strip().lower() if new_uk_rate else ''
             old_uk_rate_clean = old_uk_rate.strip().lower() if old_uk_rate else ''
-            
+
             old_ni_rate = old_data.get('north_ireland_rate', '') or ''
             new_ni_rate_clean = new_ni_rate.strip().lower() if new_ni_rate else ''
             old_ni_rate_clean = old_ni_rate.strip().lower() if old_ni_rate else ''
 
             # 检查是否有变化
             uk_rate_changed = new_uk_rate_clean != old_uk_rate_clean
-            ni_rate_changed = new_ni_rate_clean != old_ni_rate_clean
+            ni_rate_changed = new_ni_rate_clean != old_ni_rate_clean and ni_success  # 只有成功获取NI数据才检查变化
             desc_changed = new_description and new_description != old_data.get('description', '')
 
             if not uk_rate_changed and not ni_rate_changed and not desc_changed:
+                status_msg = []
+                status_msg.append('英国税率无变化')
+                if ni_success:
+                    status_msg.append('北爱尔兰税率无变化')
+                else:
+                    status_msg.append(f'北爱尔兰数据获取失败: {ni_error}')
+                if new_description and not desc_changed:
+                    status_msg.append('描述无变化')
+
                 return {
                     'success': True,
-                    'message': '英国税率、北爱尔兰税率和描述均无变化，无需更新',
+                    'message': '，'.join(status_msg) + '，无需更新',
                     'updated': False,
                     'old_data': old_data,
-                    'new_data': old_data
+                    'new_data': old_data,
+                    'uk_success': uk_success,
+                    'ni_success': ni_success
                 }
 
             # 执行更新
@@ -450,7 +486,7 @@ class TariffScraper:
             # 获取更新后的数据
             updated_data = self.db.get_tariff(code)
 
-            # 构建消息
+            # 构建详细的消息
             changed_parts = []
             if uk_rate_changed:
                 changed_parts.append('英国税率')
@@ -458,14 +494,25 @@ class TariffScraper:
                 changed_parts.append('北爱尔兰税率')
             if desc_changed:
                 changed_parts.append('描述')
-            
+
             change_msg = '、'.join(changed_parts)
+
+            # 添加状态信息
+            status_info = []
+            status_info.append(f'英国数据: {"成功" if uk_success else "失败"}')
+            if ni_url:
+                status_info.append(f'北爱尔兰数据: {"成功" if ni_success else "失败"}')
+
+            full_message = f'成功更新数据（{change_msg}）[{", ".join(status_info)}]'
+
             return {
                 'success': True,
-                'message': f'成功更新数据（{change_msg}）',
+                'message': full_message,
                 'updated': True,
                 'old_data': old_data,
-                'new_data': updated_data
+                'new_data': updated_data,
+                'uk_success': uk_success,
+                'ni_success': ni_success
             }
 
         except Exception as e:
@@ -475,8 +522,25 @@ class TariffScraper:
                 'message': f'自动更新失败: {str(e)}',
                 'updated': False,
                 'old_data': None,
-                'new_data': None
+                'new_data': None,
+                'uk_success': False,
+                'ni_success': False
             }
+
+    def _create_temp_parser(self):
+        """创建临时的解析器实例，避免修改全局状态"""
+        # 创建一个新的解析器实例，共享配置但使用独立的状态
+        temp_parser = TariffScraper.__new__(TariffScraper)
+        temp_parser.base_url = self.base_url
+        temp_parser.browse_url = self.browse_url
+        temp_parser.headers = self.headers
+        temp_parser.timeout = self.timeout
+        temp_parser.max_retries = self.max_retries
+        temp_parser.db = self.db
+        # 关键：使用空的existing_codes集合，允许解析已存在的记录
+        temp_parser.existing_codes = set()
+        temp_parser.visited_urls = set()
+        return temp_parser
 
 async def main():
     scraper = TariffScraper()

@@ -543,15 +543,24 @@ class TariffGUI:
             uk_url = values[2]  # 英国网址在第3列
             ni_url = values[4] if len(values) > 4 and values[4] else None  # 北爱尔兰网址在第5列
 
+            # 验证URL有效性
             if not uk_url or not uk_url.strip():
                 messagebox.showwarning("警告", "该记录没有英国税率网址，无法进行自动更新")
                 return
 
+            # 构建确认消息
+            confirm_msg = f"将自动抓取商品编码 {code} 的最新税率数据并与当前数据对比：\n\n"
+            confirm_msg += f"• 英国税率网址: {uk_url[:60]}{'...' if len(uk_url) > 60 else ''}\n"
+
+            if ni_url and ni_url.strip():
+                confirm_msg += f"• 北爱尔兰税率网址: {ni_url[:60]}{'...' if len(ni_url) > 60 else ''}\n"
+            else:
+                confirm_msg += f"• 北爱尔兰税率网址: 未提供\n"
+
+            confirm_msg += f"\n如有变化则自动更新。确认继续吗？"
+
             # 确认对话框
-            if not messagebox.askyesno("确认自动更新",
-                                       f"将自动抓取商品编码 {code} 的最新税率数据并与当前数据对比，\n"
-                                       f"如有变化则更新。\n\n"
-                                       f"确认继续吗？"):
+            if not messagebox.askyesno("确认自动更新", confirm_msg):
                 return
 
             # 在后台线程中执行自动更新
@@ -562,8 +571,11 @@ class TariffGUI:
             )
             thread.start()
 
-            # 显示状态
-            self.status_var.set("正在自动更新...")
+            # 显示详细状态
+            regions = ["英国"]
+            if ni_url and ni_url.strip():
+                regions.append("北爱尔兰")
+            self.status_var.set(f"正在自动更新{', '.join(regions)}税率数据...")
 
         except IndexError:
             messagebox.showwarning("警告", "请先选择要自动更新的数据")
@@ -592,6 +604,10 @@ class TariffGUI:
     def _handle_auto_update_result(self, result: Dict, code: str):
         """处理自动更新结果"""
         try:
+            # 获取新的状态字段
+            uk_success = result.get('uk_success', False)
+            ni_success = result.get('ni_success', False)
+
             if result['success']:
                 if result['updated']:
                     # 实际更新了数据
@@ -601,21 +617,7 @@ class TariffGUI:
                     self._refresh_results()
 
                     # 显示详细信息对话框
-                    old_data = result['old_data']
-                    new_data = result['new_data']
-
-                    # 构建比较信息
-                    old_rate = old_data.get('rate', '(无)')
-                    new_rate = new_data.get('rate', '(无)')
-
-                    detail_msg = (f"商品编码: {code}\n"
-                                 f"\n"
-                                 f"原税率: {old_rate}\n"
-                                 f"新税率: {new_rate}\n"
-                                 f"\n"
-                                 f"{result['message']}")
-
-                    messagebox.showinfo("自动更新成功", detail_msg)
+                    self._show_detailed_update_dialog(code, result, uk_success, ni_success)
 
                 else:
                     # 没有变化，不需要更新
@@ -624,12 +626,193 @@ class TariffGUI:
             else:
                 # 自动更新失败
                 self.status_var.set("自动更新失败")
-                messagebox.showerror("自动更新失败", result['message'])
+
+                # 构建详细错误信息
+                error_msg = result['message']
+                if not uk_success:
+                    error_msg += "\n\n英国数据获取失败"
+                if result.get('ni_url') and not ni_success:
+                    error_msg += "\n北爱尔兰数据获取失败"
+
+                messagebox.showerror("自动更新失败", error_msg)
 
         except Exception as e:
             logger.error(f"处理自动更新结果失败: {str(e)}")
             self.status_var.set("处理自动更新结果时出错")
             messagebox.showerror("错误", f"处理自动更新结果失败: {str(e)}")
+
+    def _show_detailed_update_dialog(self, code: str, result: Dict, uk_success: bool, ni_success: bool):
+        """显示详细的更新结果对话框"""
+        try:
+            old_data = result['old_data']
+            new_data = result['new_data']
+
+            # 创建详细信息对话框
+            dialog = tk.Toplevel(self.root)
+            dialog.title("自动更新详情")
+            dialog.geometry("600x500")
+            dialog.resizable(True, True)
+
+            # 设置模态
+            dialog.transient(self.root)
+            dialog.grab_set()
+
+            # 主框架
+            main_frame = ttk.Frame(dialog, padding="20")
+            main_frame.pack(fill=tk.BOTH, expand=True)
+
+            # 商品编码
+            code_frame = ttk.Frame(main_frame)
+            code_frame.pack(fill=tk.X, pady=(0, 10))
+            ttk.Label(code_frame, text="商品编码:", font=('TkDefaultFont', 10, 'bold')).pack(side=tk.LEFT)
+            ttk.Label(code_frame, text=code, font=('TkDefaultFont', 10)).pack(side=tk.LEFT, padx=(5, 0))
+
+            # 状态指示器
+            status_frame = ttk.Frame(main_frame)
+            status_frame.pack(fill=tk.X, pady=(0, 15))
+
+            ttk.Label(status_frame, text="数据获取状态:", font=('TkDefaultFont', 10, 'bold')).pack(side=tk.LEFT)
+
+            # 英国状态
+            uk_status = "✅ 成功" if uk_success else "❌ 失败"
+            uk_label = ttk.Label(status_frame, text=f"英国 {uk_status}")
+            uk_label.pack(side=tk.LEFT, padx=(10, 20))
+
+            # 北爱尔兰状态
+            ni_status = "✅ 成功" if ni_success else "❌ 失败"
+            ni_label = ttk.Label(status_frame, text=f"北爱尔兰 {ni_status}")
+            ni_label.pack(side=tk.LEFT, padx=(0, 10))
+
+            # 创建笔记本用于分组显示
+            notebook = ttk.Notebook(main_frame)
+            notebook.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+
+            # 数据对比标签页
+            comparison_frame = ttk.Frame(notebook, padding="10")
+            notebook.add(comparison_frame, text="数据对比")
+
+            # 创建对比表格
+            columns = ('字段', '更新前', '更新后', '状态')
+            comparison_tree = ttk.Treeview(comparison_frame, columns=columns, show='headings', height=8)
+
+            # 设置列标题和宽度
+            column_widths = {'字段': 120, '更新前': 150, '更新后': 150, '状态': 100}
+            for col in columns:
+                comparison_tree.heading(col, text=col)
+                comparison_tree.column(col, width=column_widths[col])
+
+            # 添加滚动条
+            comp_scrollbar = ttk.Scrollbar(comparison_frame, orient=tk.VERTICAL, command=comparison_tree.yview)
+            comparison_tree.configure(yscrollcommand=comp_scrollbar.set)
+
+            # 布局对比表格
+            comp_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            comparison_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+            # 填充对比数据
+            self._fill_comparison_data(comparison_tree, old_data, new_data)
+
+            # 原始数据标签页
+            raw_frame = ttk.Frame(notebook, padding="10")
+            notebook.add(raw_frame, text="原始数据")
+
+            # 创建文本框显示原始数据
+            raw_text = tk.Text(raw_frame, wrap=tk.WORD, height=15, font=('Consolas', 9))
+            raw_scrollbar = ttk.Scrollbar(raw_frame, orient=tk.VERTICAL, command=raw_text.yview)
+            raw_text.configure(yscrollcommand=raw_scrollbar.set)
+
+            # 布局原始数据
+            raw_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            raw_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+            # 填充原始数据
+            raw_content = self._format_raw_data(old_data, new_data, uk_success, ni_success)
+            raw_text.insert('1.0', raw_content)
+            raw_text.configure(state='disabled')
+
+            # 按钮框架
+            button_frame = ttk.Frame(main_frame)
+            button_frame.pack(fill=tk.X, pady=(15, 0))
+
+            # 关闭按钮
+            close_btn = ttk.Button(button_frame, text="关闭", command=dialog.destroy)
+            close_btn.pack(side=tk.RIGHT)
+
+            # 居中显示对话框
+            dialog.geometry("+%d+%d" % (
+                self.root.winfo_rootx() + 100,
+                self.root.winfo_rooty() + 50
+            ))
+
+        except Exception as e:
+            logger.error(f"显示详细更新对话框失败: {str(e)}")
+            # 如果详细对话框失败，回退到简单对话框
+            messagebox.showinfo("自动更新成功", result['message'])
+
+    def _fill_comparison_data(self, tree, old_data: Dict, new_data: Dict):
+        """填充数据对比表格"""
+        try:
+            # 定义要对比的字段
+            fields = [
+                ('描述', 'description'),
+                ('英国税率', 'rate'),
+                ('北爱尔兰税率', 'north_ireland_rate'),
+                ('英国网址', 'url'),
+                ('北爱尔兰网址', 'north_ireland_url')
+            ]
+
+            for display_name, field_name in fields:
+                old_value = old_data.get(field_name, '') or '(无)'
+                new_value = new_data.get(field_name, '') or '(无)'
+
+                # 确定状态
+                if old_value == new_value:
+                    status = "无变化"
+                else:
+                    status = "已更新"
+
+                # 插入数据
+                tree.insert('', 'end', values=(display_name, old_value[:50] + '...' if len(old_value) > 50 else old_value,
+                                             new_value[:50] + '...' if len(new_value) > 50 else new_value, status))
+
+        except Exception as e:
+            logger.error(f"填充对比数据失败: {str(e)}")
+
+    def _format_raw_data(self, old_data: Dict, new_data: Dict, uk_success: bool, ni_success: bool) -> str:
+        """格式化原始数据用于显示"""
+        try:
+            content = []
+            content.append("=" * 50)
+            content.append("自动更新结果详情")
+            content.append("=" * 50)
+            content.append(f"更新时间: {self._get_current_time()}")
+            content.append(f"英国数据获取: {'成功' if uk_success else '失败'}")
+            content.append(f"北爱尔兰数据获取: {'成功' if ni_success else '失败'}")
+            content.append("")
+
+            content.append("-" * 30)
+            content.append("更新前数据:")
+            content.append("-" * 30)
+            for key, value in old_data.items():
+                content.append(f"{key}: {value}")
+
+            content.append("")
+            content.append("-" * 30)
+            content.append("更新后数据:")
+            content.append("-" * 30)
+            for key, value in new_data.items():
+                content.append(f"{key}: {value}")
+
+            return "\n".join(content)
+
+        except Exception as e:
+            logger.error(f"格式化原始数据失败: {str(e)}")
+            return f"格式化数据失败: {str(e)}"
+
+    def _get_current_time(self) -> str:
+        """获取当前时间字符串"""
+        from datetime import datetime
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     def run(self):
         """运行GUI"""
