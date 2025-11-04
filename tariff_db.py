@@ -206,12 +206,21 @@ class TariffDB:
         except Exception as e:
             logger.error(f"记录抓取错误失败: {str(e)}")
 
-    def get_scrape_errors(self) -> List[Dict]:
-        """获取所有抓取错误记录"""
+    def get_scrape_errors(self, code: str = None) -> List[Dict]:
+        """获取抓取错误记录"""
         try:
-            cur = self.conn.execute(
-                "SELECT code, error_message, timestamp FROM scrape_errors"
-            )
+            if code:
+                # 获取指定编码的错误记录
+                cur = self.conn.execute(
+                    "SELECT code, error_message, timestamp FROM scrape_errors WHERE code = ?",
+                    (code,)
+                )
+            else:
+                # 获取所有错误记录
+                cur = self.conn.execute(
+                    "SELECT code, error_message, timestamp FROM scrape_errors"
+                )
+
             return [
                 {
                     'code': row[0],

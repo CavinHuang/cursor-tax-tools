@@ -339,8 +339,8 @@ class TariffScraper:
         db = TariffDB()
         return db.get_record_count()
 
-    def auto_update_single(self, code: str, uk_url: str, ni_url: str = None) -> Dict:
-        """自动更新单个商品的税率信息（支持英国和北爱尔兰）
+    async def auto_update_single(self, code: str, uk_url: str, ni_url: str = None) -> Dict:
+        """自动更新单个商品的税率信息（支持英国和北爱尔兰，独立更新）
 
         Args:
             code: 商品编码
@@ -349,27 +349,36 @@ class TariffScraper:
 
         Returns:
             包含更新结果的字典：{
-                'success': bool,
-                'message': str,
-                'updated': bool,
-                'old_data': dict,
-                'new_data': dict,
-                'uk_success': bool,  # 英国数据是否获取成功
-                'ni_success': bool   # 北爱尔兰数据是否获取成功
+                'overall_success': bool,  # 总体是否成功（至少一个地区成功）
+                'uk_success': bool,       # 英国数据是否获取成功
+                'ni_success': bool,       # 北爱尔兰数据是否获取成功
+                'uk_updated': bool,       # 英国数据是否实际更新
+                'ni_updated': bool,       # 北爱尔兰数据是否实际更新
+                'message': str,           # 详细的状态描述
+                'old_data': dict,         # 更新前的数据
+                'new_data': dict          # 更新后的数据
             }
         """
         try:
             # 获取当前数据
             old_data = self.db.get_tariff(code)
             if not old_data:
+                # 记录错误到数据库
+                error_message = f'未找到商品编码 {code} 的记录'
+                try:
+                    self.db.add_scrape_error(code, error_message)
+                except Exception as db_error:
+                    logger.error(f"保存错误记录到数据库失败 {code}: {str(db_error)}")
+
                 return {
-                    'success': False,
-                    'message': f'未找到商品编码 {code} 的记录',
-                    'updated': False,
-                    'old_data': None,
-                    'new_data': None,
+                    'overall_success': False,
                     'uk_success': False,
-                    'ni_success': False
+                    'ni_success': False,
+                    'uk_updated': False,
+                    'ni_updated': False,
+                    'message': error_message,
+                    'old_data': None,
+                    'new_data': None
                 }
 
             # 创建解析器实例避免修改全局状态
@@ -410,7 +419,7 @@ class TariffScraper:
                 return results
 
             # 执行并行抓取
-            fetch_results = asyncio.run(fetch_all_data())
+            fetch_results = await fetch_all_data()
 
             # 解析结果
             uk_result = fetch_results[0]
@@ -422,109 +431,150 @@ class TariffScraper:
             uk_success = uk_data_parsed is not None
             ni_success = ni_data_parsed is not None
 
-            if not uk_success:
-                return {
-                    'success': False,
-                    'message': f'{uk_error}',
-                    'updated': False,
-                    'old_data': old_data,
-                    'new_data': None,
-                    'uk_success': uk_success,
-                    'ni_success': ni_success
-                }
-
-            # 提取要更新的数据
-            new_uk_rate = uk_data_parsed.get('rate', '')
-            new_description = uk_data_parsed.get('description', '')
-            new_ni_rate = ni_data_parsed.get('rate', '') if ni_data_parsed else ''
-
-            # 对比税率是否变化（忽略大小写和空格）
-            old_uk_rate = old_data.get('rate', '') or ''
-            new_uk_rate_clean = new_uk_rate.strip().lower() if new_uk_rate else ''
-            old_uk_rate_clean = old_uk_rate.strip().lower() if old_uk_rate else ''
-
-            old_ni_rate = old_data.get('north_ireland_rate', '') or ''
-            new_ni_rate_clean = new_ni_rate.strip().lower() if new_ni_rate else ''
-            old_ni_rate_clean = old_ni_rate.strip().lower() if old_ni_rate else ''
-
-            # 检查是否有变化
-            uk_rate_changed = new_uk_rate_clean != old_uk_rate_clean
-            ni_rate_changed = new_ni_rate_clean != old_ni_rate_clean and ni_success  # 只有成功获取NI数据才检查变化
-            desc_changed = new_description and new_description != old_data.get('description', '')
-
-            if not uk_rate_changed and not ni_rate_changed and not desc_changed:
-                status_msg = []
-                status_msg.append('英国税率无变化')
-                if ni_success:
-                    status_msg.append('北爱尔兰税率无变化')
-                else:
-                    status_msg.append(f'北爱尔兰数据获取失败: {ni_error}')
-                if new_description and not desc_changed:
-                    status_msg.append('描述无变化')
-
-                return {
-                    'success': True,
-                    'message': '，'.join(status_msg) + '，无需更新',
-                    'updated': False,
-                    'old_data': old_data,
-                    'new_data': old_data,
-                    'uk_success': uk_success,
-                    'ni_success': ni_success
-                }
-
-            # 执行更新
+            # 独立处理每个地区的数据更新
             update_data = {}
-            if uk_rate_changed:
-                update_data['rate'] = new_uk_rate
-            if ni_rate_changed:
-                update_data['north_ireland_rate'] = new_ni_rate
-            if desc_changed:
-                update_data['description'] = new_description
-
-            self.db.update_tariff(code=code, **update_data)
-
-            # 获取更新后的数据
-            updated_data = self.db.get_tariff(code)
-
-            # 构建详细的消息
+            uk_updated = False
+            ni_updated = False
             changed_parts = []
-            if uk_rate_changed:
-                changed_parts.append('英国税率')
-            if ni_rate_changed:
-                changed_parts.append('北爱尔兰税率')
-            if desc_changed:
-                changed_parts.append('描述')
+            status_messages = []
 
-            change_msg = '、'.join(changed_parts)
+            # 处理英国数据
+            if uk_success:
+                new_uk_rate = uk_data_parsed.get('rate', '')
+                new_description = uk_data_parsed.get('description', '')
 
-            # 添加状态信息
-            status_info = []
-            status_info.append(f'英国数据: {"成功" if uk_success else "失败"}')
-            if ni_url:
-                status_info.append(f'北爱尔兰数据: {"成功" if ni_success else "失败"}')
+                # 检查英国税率变化
+                old_uk_rate = old_data.get('rate', '') or ''
+                new_uk_rate_clean = new_uk_rate.strip().lower() if new_uk_rate else ''
+                old_uk_rate_clean = old_uk_rate.strip().lower() if old_uk_rate else ''
 
-            full_message = f'成功更新数据（{change_msg}）[{", ".join(status_info)}]'
+                uk_rate_changed = new_uk_rate_clean != old_uk_rate_clean
+                desc_changed = new_description and new_description != old_data.get('description', '')
+
+                if uk_rate_changed:
+                    update_data['rate'] = new_uk_rate
+                    uk_updated = True
+                    changed_parts.append('英国税率')
+
+                if desc_changed:
+                    update_data['description'] = new_description
+                    uk_updated = True
+                    changed_parts.append('描述')
+
+                # 记录状态
+                if uk_rate_changed or desc_changed:
+                    status_messages.append("英国数据已更新")
+                else:
+                    status_messages.append("英国数据无变化")
+            else:
+                status_messages.append(f"英国数据获取失败: {uk_error}")
+
+            # 处理北爱尔兰数据
+            if ni_success:
+                new_ni_rate = ni_data_parsed.get('rate', '')
+
+                # 检查北爱尔兰税率变化
+                old_ni_rate = old_data.get('north_ireland_rate', '') or ''
+                new_ni_rate_clean = new_ni_rate.strip().lower() if new_ni_rate else ''
+                old_ni_rate_clean = old_ni_rate.strip().lower() if old_ni_rate else ''
+
+                ni_rate_changed = new_ni_rate_clean != old_ni_rate_clean
+
+                if ni_rate_changed:
+                    update_data['north_ireland_rate'] = new_ni_rate
+                    ni_updated = True
+                    changed_parts.append('北爱尔兰税率')
+                    status_messages.append("北爱尔兰数据已更新")
+                else:
+                    status_messages.append("北爱尔兰数据无变化")
+            elif ni_url:  # 提供了URL但获取失败
+                status_messages.append(f"北爱尔兰数据获取失败: {ni_error}")
+            else:
+                status_messages.append("北爱尔兰数据：未提供URL")
+
+            # 执行数据库更新（如果有任何变化）
+            any_updated = uk_updated or ni_updated
+            if any_updated:
+                self.db.update_tariff(code=code, **update_data)
+                updated_data = self.db.get_tariff(code)
+            else:
+                updated_data = old_data
+
+            # 判断总体成功状态（至少一个地区成功获取数据就算成功）
+            overall_success = uk_success or ni_success
+
+            # 构建最终消息
+            if any_updated:
+                if len(changed_parts) > 0:
+                    change_msg = '、'.join(changed_parts)
+                    full_message = f'✅ 成功更新（{change_msg}）| {" | ".join(status_messages)}'
+                else:
+                    full_message = f'ℹ️ 数据无变化 | {" | ".join(status_messages)}'
+            else:
+                if overall_success:
+                    full_message = f'ℹ️ 数据无变化 | {" | ".join(status_messages)}'
+                else:
+                    full_message = f'❌ 更新失败 | {" | ".join(status_messages)}'
 
             return {
-                'success': True,
+                'overall_success': overall_success,
+                'uk_success': uk_success,
+                'ni_success': ni_success,
+                'uk_updated': uk_updated,
+                'ni_updated': ni_updated,
                 'message': full_message,
-                'updated': True,
                 'old_data': old_data,
                 'new_data': updated_data,
-                'uk_success': uk_success,
-                'ni_success': ni_success
+                'updated': any_updated  # 保持向后兼容
             }
 
         except Exception as e:
             logger.error(f"自动更新失败: {str(e)}")
             return {
-                'success': False,
+                'overall_success': False,
+                'uk_success': False,
+                'ni_success': False,
+                'uk_updated': False,
+                'ni_updated': False,
                 'message': f'自动更新失败: {str(e)}',
-                'updated': False,
                 'old_data': None,
                 'new_data': None,
+                'updated': False
+            }
+
+    def auto_update_single_sync(self, code: str, uk_url: str, ni_url: str = None) -> Dict:
+        """同步版本的 auto_update_single 方法（用于向后兼容）"""
+        try:
+            # 尝试获取当前事件循环
+            try:
+                loop = asyncio.get_running_loop()
+                # 如果已经在异步环境中，使用 asyncio.create_task
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, self.auto_update_single(code, uk_url, ni_url))
+                    return future.result()
+            except RuntimeError:
+                # 没有运行的事件循环，直接使用 asyncio.run
+                return asyncio.run(self.auto_update_single(code, uk_url, ni_url))
+        except Exception as e:
+            logger.error(f"同步自动更新失败: {str(e)}")
+
+            # 将错误记录保存到数据库
+            try:
+                self.db.add_scrape_error(code, f"同步自动更新失败: {str(e)}")
+            except Exception as db_error:
+                logger.error(f"保存错误记录到数据库失败 {code}: {str(db_error)}")
+
+            return {
+                'overall_success': False,
                 'uk_success': False,
-                'ni_success': False
+                'ni_success': False,
+                'uk_updated': False,
+                'ni_updated': False,
+                'message': f'同步自动更新失败: {str(e)}',
+                'old_data': None,
+                'new_data': None,
+                'updated': False
             }
 
     def _create_temp_parser(self):
@@ -541,6 +591,379 @@ class TariffScraper:
         temp_parser.existing_codes = set()
         temp_parser.visited_urls = set()
         return temp_parser
+
+class BatchUpdateManager:
+    """批量更新管理器 - 支持批量更新所有关税数据"""
+
+    def __init__(self, progress_callback=None, status_callback=None):
+        """初始化批量更新管理器
+
+        Args:
+            progress_callback: 进度回调函数 (completed, total, message)
+            status_callback: 状态回调函数 (message)
+        """
+        self.scraper = TariffScraper()
+        self.db = TariffDB()
+        self.progress_callback = progress_callback
+        self.status_callback = status_callback
+
+        # 控制状态
+        self.is_paused = False
+        self.is_cancelled = False
+        self.is_running = False
+
+        # 统计信息
+        self.stats = {
+            'total': 0,
+            'completed': 0,
+            'successful': 0,
+            'failed': 0,
+            'skipped': 0,
+            'uk_updated': 0,
+            'ni_updated': 0,
+            'start_time': None,
+            'errors': []
+        }
+
+        logger.info("BatchUpdateManager 初始化完成")
+
+    def _update_progress(self, completed, total, message=""):
+        """更新进度"""
+        if self.progress_callback:
+            self.progress_callback(completed, total, message)
+
+        # 更新统计信息
+        self.stats['completed'] = completed
+        self.stats['total'] = total
+
+    def _update_status(self, message):
+        """更新状态"""
+        if self.status_callback:
+            self.status_callback(message)
+        logger.info(f"批量更新状态: {message}")
+
+    def _check_control_state(self):
+        """检查控制状态"""
+        if self.is_cancelled:
+            raise InterruptedError("用户取消了批量更新")
+
+        while self.is_paused and not self.is_cancelled:
+            import time
+            time.sleep(0.5)  # 暂停时等待
+
+        if self.is_cancelled:
+            raise InterruptedError("用户取消了批量更新")
+
+    async def _process_batch(self, tariff_batch, update_uk=True, update_ni=True):
+        """处理一批关税数据更新
+
+        Args:
+            tariff_batch: 一批关税数据列表
+            update_uk: 是否更新英国数据
+            update_ni: 是否更新北爱尔兰数据
+
+        Returns:
+            处理结果统计
+        """
+        batch_results = []
+
+        # 创建信号量控制并发数
+        semaphore = asyncio.Semaphore(10)  # 最多10个并发请求
+
+        async def process_single_tariff(tariff):
+            async with semaphore:
+                try:
+                    self._check_control_state()
+
+                    code = tariff['code']
+                    uk_url = tariff.get('url', '')
+                    ni_url = tariff.get('north_ireland_url', '')
+
+                    # 检查是否需要更新
+                    if not update_uk:
+                        uk_url = None
+                    if not update_ni:
+                        ni_url = None
+
+                    if not uk_url and not ni_url:
+                        return {'code': code, 'status': 'skipped', 'reason': '无可用URL'}
+
+                    # 执行单个更新
+                    result = await self.scraper.auto_update_single(code, uk_url, ni_url)
+
+                    success = result.get('overall_success', False)
+
+                    # 如果更新失败，将错误记录保存到数据库
+                    if not success:
+                        error_message = result.get('message', '未知错误')
+                        try:
+                            self.db.add_scrape_error(code, f"自动更新失败: {error_message}")
+                        except Exception as db_error:
+                            logger.error(f"保存错误记录到数据库失败 {code}: {str(db_error)}")
+
+                    return {
+                        'code': code,
+                        'status': 'success' if success else 'failed',
+                        'result': result
+                    }
+
+                except InterruptedError:
+                    raise
+                except Exception as e:
+                    logger.error(f"处理商品 {tariff.get('code', 'unknown')} 失败: {str(e)}")
+
+                    # 将错误记录保存到数据库
+                    code = tariff.get('code', 'unknown')
+                    if code != 'unknown':
+                        try:
+                            self.db.add_scrape_error(code, f"批量更新失败: {str(e)}")
+                        except Exception as db_error:
+                            logger.error(f"保存错误记录到数据库失败 {code}: {str(db_error)}")
+
+                    return {
+                        'code': code,
+                        'status': 'failed',
+                        'reason': str(e)
+                    }
+
+        # 并发处理批次
+        try:
+            batch_results = await asyncio.gather(
+                *[process_single_tariff(tariff) for tariff in tariff_batch],
+                return_exceptions=True
+            )
+        except Exception as e:
+            logger.error(f"批次处理失败: {str(e)}")
+            raise
+
+        # 统计结果
+        batch_stats = {
+            'successful': 0,
+            'failed': 0,
+            'skipped': 0,
+            'uk_updated': 0,
+            'ni_updated': 0,
+            'errors': []
+        }
+
+        for result in batch_results:
+            if isinstance(result, Exception):
+                batch_stats['failed'] += 1
+                batch_stats['errors'].append(str(result))
+                continue
+
+            if result['status'] == 'success':
+                batch_stats['successful'] += 1
+                update_result = result.get('result', {})
+                if update_result.get('uk_updated', False):
+                    batch_stats['uk_updated'] += 1
+                if update_result.get('ni_updated', False):
+                    batch_stats['ni_updated'] += 1
+            elif result['status'] == 'skipped':
+                batch_stats['skipped'] += 1
+            else:
+                batch_stats['failed'] += 1
+                if 'reason' in result:
+                    batch_stats['errors'].append(f"{result['code']}: {result['reason']}")
+
+        return batch_stats
+
+    async def update_all_tariffs(self,
+                               update_uk=True,
+                               update_ni=True,
+                               batch_size=50,
+                               delay_between_batches=1.0,
+                               filter_func=None):
+        """批量更新所有关税数据
+
+        Args:
+            update_uk: 是否更新英国税率数据
+            update_ni: 是否更新北爱尔兰税率数据
+            batch_size: 每批处理的记录数
+            delay_between_batches: 批次之间的延迟时间（秒）
+            filter_func: 过滤函数，用于筛选需要更新的记录
+
+        Returns:
+            更新结果统计
+        """
+        if self.is_running:
+            raise RuntimeError("批量更新已在运行中")
+
+        self.is_running = True
+        self.is_paused = False
+        self.is_cancelled = False
+
+        # 重置统计信息
+        self.stats = {
+            'total': 0,
+            'completed': 0,
+            'successful': 0,
+            'failed': 0,
+            'skipped': 0,
+            'uk_updated': 0,
+            'ni_updated': 0,
+            'start_time': None,
+            'errors': []
+        }
+
+        try:
+            import time
+            start_time = time.time()
+            self.stats['start_time'] = start_time
+
+            self._update_status("正在获取关税数据列表...")
+
+            # 获取所有关税数据
+            all_tariffs = self.db.get_all_tariffs()
+
+            # 应用过滤器
+            if filter_func:
+                all_tariffs = [t for t in all_tariffs if filter_func(t)]
+                self._update_status(f"筛选后需要更新 {len(all_tariffs)} 条记录")
+
+            total_count = len(all_tariffs)
+            self.stats['total'] = total_count
+
+            if total_count == 0:
+                self._update_status("没有需要更新的记录")
+                return self.stats
+
+            self._update_status(f"开始批量更新 {total_count} 条记录...")
+            self._update_progress(0, total_count, "准备开始...")
+
+            # 分批处理
+            for i in range(0, total_count, batch_size):
+                self._check_control_state()
+
+                # 获取当前批次
+                batch = all_tariffs[i:i + batch_size]
+                batch_num = i // batch_size + 1
+                total_batches = (total_count + batch_size - 1) // batch_size
+
+                self._update_status(f"正在处理第 {batch_num}/{total_batches} 批 ({len(batch)} 条记录)...")
+
+                # 处理批次
+                batch_stats = await self._process_batch(batch, update_uk, update_ni)
+
+                # 更新统计信息
+                self.stats['successful'] += batch_stats['successful']
+                self.stats['failed'] += batch_stats['failed']
+                self.stats['skipped'] += batch_stats['skipped']
+                self.stats['uk_updated'] += batch_stats['uk_updated']
+                self.stats['ni_updated'] += batch_stats['ni_updated']
+                self.stats['errors'].extend(batch_stats['errors'])
+
+                # 更新进度
+                completed = min(i + batch_size, total_count)
+                progress_percent = (completed / total_count) * 100
+
+                elapsed_time = time.time() - start_time
+                if completed > 0:
+                    rate = completed / elapsed_time
+                    remaining = total_count - completed
+                    eta_seconds = remaining / rate if rate > 0 else 0
+                    eta_minutes = eta_seconds / 60
+
+                    progress_msg = f"处理速度: {rate:.1f}条/分钟, 预计剩余: {eta_minutes:.0f}分钟"
+                else:
+                    progress_msg = "正在计算处理速度..."
+
+                self._update_progress(completed, total_count, progress_msg)
+
+                # 批次间延迟
+                if i + batch_size < total_count and delay_between_batches > 0:
+                    self._update_status(f"批次间等待 {delay_between_batches} 秒...")
+                    await asyncio.sleep(delay_between_batches)
+
+            # 完成统计
+            total_time = time.time() - start_time
+            total_minutes = total_time / 60
+
+            self._update_status(f"批量更新完成！总用时: {total_minutes:.1f}分钟")
+            self._update_progress(total_count, total_count, f"更新完成 - 成功: {self.stats['successful']}, 失败: {self.stats['failed']}, 跳过: {self.stats['skipped']}")
+
+            return self.stats
+
+        except InterruptedError:
+            self._update_status("批量更新已被用户取消")
+            raise
+        except Exception as e:
+            self._update_status(f"批量更新过程中发生错误: {str(e)}")
+            logger.error(f"批量更新失败: {str(e)}")
+            raise
+        finally:
+            self.is_running = False
+
+    def pause(self):
+        """暂停批量更新"""
+        self.is_paused = True
+        self._update_status("批量更新已暂停")
+
+    def resume(self):
+        """恢复批量更新"""
+        self.is_paused = False
+        self._update_status("批量更新已恢复")
+
+    def cancel(self):
+        """取消批量更新"""
+        self.is_cancelled = True
+        self.is_paused = False
+        self._update_status("正在取消批量更新...")
+
+    def clear_error_records(self, codes=None):
+        """清理错误记录
+
+        Args:
+            codes: 要清理的商品编码列表，如果为None则清理所有错误记录
+        """
+        try:
+            if codes is None:
+                # 清理所有错误记录
+                with self.db.conn:
+                    self.db.conn.execute("DELETE FROM scrape_errors")
+                logger.info("已清理所有错误记录")
+            else:
+                # 清理指定编码的错误记录
+                if not codes:
+                    return
+
+                placeholders = ','.join(['?' for _ in codes])
+                with self.db.conn:
+                    self.db.conn.execute(
+                        f"DELETE FROM scrape_errors WHERE code IN ({placeholders})",
+                        codes
+                    )
+                logger.info(f"已清理 {len(codes)} 个错误记录")
+        except Exception as e:
+            logger.error(f"清理错误记录失败: {str(e)}")
+            raise
+
+    def get_error_records_count(self):
+        """获取错误记录数量"""
+        try:
+            cur = self.db.conn.execute("SELECT COUNT(*) FROM scrape_errors")
+            return cur.fetchone()[0]
+        except Exception as e:
+            logger.error(f"获取错误记录数量失败: {str(e)}")
+            return 0
+
+    def get_stats(self):
+        """获取当前统计信息"""
+        stats = self.stats.copy()
+
+        # 计算处理速度
+        if stats['start_time'] and stats['completed'] > 0:
+            import time
+            elapsed_time = time.time() - stats['start_time']
+            stats['rate'] = stats['completed'] / elapsed_time
+            stats['elapsed_time'] = elapsed_time
+
+            # 估算剩余时间
+            if stats['rate'] > 0 and stats['total'] > stats['completed']:
+                remaining = stats['total'] - stats['completed']
+                stats['eta'] = remaining / stats['rate']
+
+        return stats
 
 async def main():
     scraper = TariffScraper()

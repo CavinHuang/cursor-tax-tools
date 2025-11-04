@@ -1,11 +1,15 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from typing import Dict
 import logging
 from tariff_api import TariffAPI
 from tariff_db import TariffDB
+from scraper import BatchUpdateManager
 import queue
 import threading
+import asyncio
+import os
+from datetime import datetime
 from batch_gui import BatchProcessFrame
 
 logging.basicConfig(level=logging.DEBUG)
@@ -150,6 +154,11 @@ class TariffGUI:
         # 批量查询标签页
         self.batch_frame = BatchProcessFrame(self.notebook)
         self.notebook.add(self.batch_frame, text="批量查询")
+
+        # 批量更新标签页
+        self.update_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.update_frame, text="批量更新")
+        self.setup_batch_update()
 
     def setup_single_search(self):
         """设置单个查询界面"""
@@ -602,14 +611,18 @@ class TariffGUI:
             ))
 
     def _handle_auto_update_result(self, result: Dict, code: str):
-        """处理自动更新结果"""
+        """处理自动更新结果（支持独立地区更新）"""
         try:
-            # 获取新的状态字段
+            # 获取新的状态字段（兼容新旧格式）
+            overall_success = result.get('overall_success', result.get('success', False))
             uk_success = result.get('uk_success', False)
             ni_success = result.get('ni_success', False)
+            uk_updated = result.get('uk_updated', False)
+            ni_updated = result.get('ni_updated', False)
+            any_updated = result.get('updated', uk_updated or ni_updated)
 
-            if result['success']:
-                if result['updated']:
+            if overall_success:
+                if any_updated:
                     # 实际更新了数据
                     self.status_var.set(f"自动更新成功: {result['message']}")
 
@@ -622,19 +635,27 @@ class TariffGUI:
                 else:
                     # 没有变化，不需要更新
                     self.status_var.set("自动更新完成: " + result['message'])
-                    messagebox.showinfo("自动更新完成", result['message'])
+
+                    # 根据成功状态选择不同的消息框类型
+                    if uk_success and ni_success:
+                        messagebox.showinfo("自动更新完成", result['message'])
+                    elif uk_success or ni_success:
+                        messagebox.showinfo("部分更新完成", result['message'])
+                    else:
+                        messagebox.showwarning("更新无变化", result['message'])
             else:
-                # 自动更新失败
+                # 完全失败（两个地区都失败）
                 self.status_var.set("自动更新失败")
 
                 # 构建详细错误信息
                 error_msg = result['message']
-                if not uk_success:
-                    error_msg += "\n\n英国数据获取失败"
-                if result.get('ni_url') and not ni_success:
-                    error_msg += "\n北爱尔兰数据获取失败"
 
-                messagebox.showerror("自动更新失败", error_msg)
+                # 根据失败情况显示不同类型的对话框
+                if not uk_success and not ni_success:
+                    messagebox.showerror("自动更新失败", error_msg)
+                else:
+                    # 部分失败，但仍显示为警告而不是错误
+                    messagebox.showwarning("部分更新失败", error_msg)
 
         except Exception as e:
             logger.error(f"处理自动更新结果失败: {str(e)}")
@@ -671,17 +692,57 @@ class TariffGUI:
             status_frame = ttk.Frame(main_frame)
             status_frame.pack(fill=tk.X, pady=(0, 15))
 
-            ttk.Label(status_frame, text="数据获取状态:", font=('TkDefaultFont', 10, 'bold')).pack(side=tk.LEFT)
+            ttk.Label(status_frame, text="更新状态:", font=('TkDefaultFont', 10, 'bold')).pack(side=tk.LEFT)
+
+            # 获取更新状态
+            uk_updated = result.get('uk_updated', False)
+            ni_updated = result.get('ni_updated', False)
 
             # 英国状态
-            uk_status = "✅ 成功" if uk_success else "❌ 失败"
-            uk_label = ttk.Label(status_frame, text=f"英国 {uk_status}")
+            if uk_success:
+                if uk_updated:
+                    uk_status = "✅ 已更新"
+                    uk_color = "green"
+                else:
+                    uk_status = "✅ 无变化"
+                    uk_color = "blue"
+            else:
+                uk_status = "❌ 失败"
+                uk_color = "red"
+
+            uk_label = ttk.Label(status_frame, text=f"英国 {uk_status}", foreground=uk_color)
             uk_label.pack(side=tk.LEFT, padx=(10, 20))
 
             # 北爱尔兰状态
-            ni_status = "✅ 成功" if ni_success else "❌ 失败"
-            ni_label = ttk.Label(status_frame, text=f"北爱尔兰 {ni_status}")
+            if ni_success:
+                if ni_updated:
+                    ni_status = "✅ 已更新"
+                    ni_color = "green"
+                else:
+                    ni_status = "✅ 无变化"
+                    ni_color = "blue"
+            else:
+                ni_status = "❌ 失败"
+                ni_color = "red"
+
+            ni_label = ttk.Label(status_frame, text=f"北爱尔兰 {ni_status}", foreground=ni_color)
             ni_label.pack(side=tk.LEFT, padx=(0, 10))
+
+            # 总体状态
+            overall_success = result.get('overall_success', result.get('success', uk_success or ni_success))
+            if overall_success:
+                if uk_updated or ni_updated:
+                    overall_status = "✅ 部分更新成功"
+                    overall_color = "green"
+                else:
+                    overall_status = "ℹ️ 数据无变化"
+                    overall_color = "blue"
+            else:
+                overall_status = "❌ 更新失败"
+                overall_color = "red"
+
+            overall_label = ttk.Label(status_frame, text=f"总体 {overall_status}", foreground=overall_color, font=('TkDefaultFont', 9, 'bold'))
+            overall_label.pack(side=tk.LEFT, padx=(20, 0))
 
             # 创建笔记本用于分组显示
             notebook = ttk.Notebook(main_frame)
@@ -813,6 +874,455 @@ class TariffGUI:
         """获取当前时间字符串"""
         from datetime import datetime
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    def setup_batch_update(self):
+        """设置批量更新界面"""
+        # 配置框架
+        config_frame = ttk.LabelFrame(self.update_frame, text="更新配置")
+        config_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        # 更新选项
+        options_frame = ttk.Frame(config_frame)
+        options_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        # 英国税率更新选项
+        self.update_uk_var = tk.BooleanVar(value=True)
+        uk_check = ttk.Checkbutton(
+            options_frame,
+            text="更新英国税率",
+            variable=self.update_uk_var
+        )
+        uk_check.pack(side=tk.LEFT, padx=(0, 20))
+
+        # 北爱尔兰税率更新选项
+        self.update_ni_var = tk.BooleanVar(value=True)
+        ni_check = ttk.Checkbutton(
+            options_frame,
+            text="更新北爱尔兰税率",
+            variable=self.update_ni_var
+        )
+        ni_check.pack(side=tk.LEFT, padx=(0, 20))
+
+        # 仅更新错误记录选项
+        self.update_errors_only_var = tk.BooleanVar(value=False)
+        errors_check = ttk.Checkbutton(
+            options_frame,
+            text="仅更新有错误的记录",
+            variable=self.update_errors_only_var
+        )
+        errors_check.pack(side=tk.LEFT)
+
+        # 高级设置框架
+        advanced_frame = ttk.LabelFrame(config_frame, text="高级设置")
+        advanced_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        # 批量大小
+        batch_size_frame = ttk.Frame(advanced_frame)
+        batch_size_frame.pack(fill=tk.X, padx=5, pady=2)
+        ttk.Label(batch_size_frame, text="批量大小:").pack(side=tk.LEFT)
+        self.batch_size_var = tk.StringVar(value="50")
+        batch_size_spin = ttk.Spinbox(
+            batch_size_frame,
+            from_=10,
+            to=200,
+            textvariable=self.batch_size_var,
+            width=10
+        )
+        batch_size_spin.pack(side=tk.LEFT, padx=(5, 20))
+
+        # 批次延迟
+        delay_frame = ttk.Frame(advanced_frame)
+        delay_frame.pack(fill=tk.X, padx=5, pady=2)
+        ttk.Label(delay_frame, text="批次间延迟(秒):").pack(side=tk.LEFT)
+        self.delay_var = tk.StringVar(value="1.0")
+        delay_spin = ttk.Spinbox(
+            delay_frame,
+            from_=0.1,
+            to=10.0,
+            increment=0.1,
+            textvariable=self.delay_var,
+            width=10
+        )
+        delay_spin.pack(side=tk.LEFT, padx=(5, 20))
+
+        # 控制按钮框架
+        control_frame = ttk.Frame(config_frame)
+        control_frame.pack(fill=tk.X, padx=5, pady=10)
+
+        # 开始更新按钮
+        self.start_update_btn = ttk.Button(
+            control_frame,
+            text="开始批量更新",
+            command=self.start_batch_update
+        )
+        self.start_update_btn.pack(side=tk.LEFT, padx=5)
+
+        # 暂停按钮
+        self.pause_update_btn = ttk.Button(
+            control_frame,
+            text="暂停",
+            command=self.pause_batch_update,
+            state='disabled'
+        )
+        self.pause_update_btn.pack(side=tk.LEFT, padx=5)
+
+        # 停止按钮
+        self.stop_update_btn = ttk.Button(
+            control_frame,
+            text="停止",
+            command=self.stop_batch_update,
+            state='disabled'
+        )
+        self.stop_update_btn.pack(side=tk.LEFT, padx=5)
+
+        # 导出错误报告按钮
+        self.export_errors_btn = ttk.Button(
+            control_frame,
+            text="导出错误报告",
+            command=self.export_error_report
+        )
+        self.export_errors_btn.pack(side=tk.RIGHT, padx=5)
+
+        # 进度显示框架
+        progress_frame = ttk.LabelFrame(self.update_frame, text="更新进度")
+        progress_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        # 总体进度条
+        overall_progress_frame = ttk.Frame(progress_frame)
+        overall_progress_frame.pack(fill=tk.X, padx=5, pady=5)
+        ttk.Label(overall_progress_frame, text="总体进度:").pack(side=tk.LEFT)
+        self.overall_progress_var = tk.DoubleVar()
+        self.overall_progress_bar = ttk.Progressbar(
+            overall_progress_frame,
+            variable=self.overall_progress_var,
+            maximum=100,
+            length=300
+        )
+        self.overall_progress_bar.pack(side=tk.LEFT, padx=(5, 10))
+
+        self.progress_label = ttk.Label(overall_progress_frame, text="0/0 (0.0%)")
+        self.progress_label.pack(side=tk.LEFT)
+
+        # 状态标签
+        self.update_status_var = tk.StringVar(value="就绪")
+        status_label = ttk.Label(progress_frame, textvariable=self.update_status_var)
+        status_label.pack(padx=5, pady=2)
+
+        # 统计信息框架
+        stats_frame = ttk.LabelFrame(self.update_frame, text="统计信息")
+        stats_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        # 创建统计信息显示
+        stats_grid = ttk.Frame(stats_frame)
+        stats_grid.pack(fill=tk.X, padx=5, pady=5)
+
+        # 第一行统计
+        ttk.Label(stats_grid, text="成功:").grid(row=0, column=0, sticky=tk.W, padx=5)
+        self.success_count_label = ttk.Label(stats_grid, text="0", foreground="green")
+        self.success_count_label.grid(row=0, column=1, sticky=tk.W, padx=5)
+
+        ttk.Label(stats_grid, text="失败:").grid(row=0, column=2, sticky=tk.W, padx=5)
+        self.failed_count_label = ttk.Label(stats_grid, text="0", foreground="red")
+        self.failed_count_label.grid(row=0, column=3, sticky=tk.W, padx=5)
+
+        ttk.Label(stats_grid, text="跳过:").grid(row=0, column=4, sticky=tk.W, padx=5)
+        self.skipped_count_label = ttk.Label(stats_grid, text="0", foreground="orange")
+        self.skipped_count_label.grid(row=0, column=5, sticky=tk.W, padx=5)
+
+        # 第二行统计
+        ttk.Label(stats_grid, text="英国更新:").grid(row=1, column=0, sticky=tk.W, padx=5)
+        self.uk_updated_label = ttk.Label(stats_grid, text="0", foreground="blue")
+        self.uk_updated_label.grid(row=1, column=1, sticky=tk.W, padx=5)
+
+        ttk.Label(stats_grid, text="北爱尔兰更新:").grid(row=1, column=2, sticky=tk.W, padx=5)
+        self.ni_updated_label = ttk.Label(stats_grid, text="0", foreground="purple")
+        self.ni_updated_label.grid(row=1, column=3, sticky=tk.W, padx=5)
+
+        ttk.Label(stats_grid, text="处理速度:").grid(row=1, column=4, sticky=tk.W, padx=5)
+        self.speed_label = ttk.Label(stats_grid, text="0条/分钟")
+        self.speed_label.grid(row=1, column=5, sticky=tk.W, padx=5)
+
+        # 日志显示框架
+        log_frame = ttk.LabelFrame(self.update_frame, text="更新日志")
+        log_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        # 日志文本框
+        self.update_log_text = tk.Text(
+            log_frame,
+            height=15,
+            wrap=tk.WORD,
+            font=('Consolas', 9)
+        )
+        log_scroll = ttk.Scrollbar(
+            log_frame,
+            command=self.update_log_text.yview
+        )
+        self.update_log_text.configure(yscrollcommand=log_scroll.set)
+
+        log_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.update_log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # 初始化批量更新管理器
+        self.batch_update_manager = None
+        self.update_thread = None
+
+    def start_batch_update(self):
+        """开始批量更新"""
+        try:
+            # 验证配置
+            batch_size = int(self.batch_size_var.get())
+            delay = float(self.delay_var.get())
+
+            if batch_size < 1 or batch_size > 200:
+                messagebox.showerror("错误", "批量大小必须在1-200之间")
+                return
+
+            if delay < 0.1 or delay > 10.0:
+                messagebox.showerror("错误", "批次间延迟必须在0.1-10秒之间")
+                return
+
+            # 确认对话框
+            update_uk = self.update_uk_var.get()
+            update_ni = self.update_ni_var.get()
+            errors_only = self.update_errors_only_var.get()
+
+            if not update_uk and not update_ni:
+                messagebox.showwarning("警告", "请至少选择一个更新选项")
+                return
+
+            # 构建确认消息
+            confirm_msg = f"即将开始批量更新，配置如下：\n\n"
+            confirm_msg += f"• 更新英国税率: {'是' if update_uk else '否'}\n"
+            confirm_msg += f"• 更新北爱尔兰税率: {'是' if update_ni else '否'}\n"
+            confirm_msg += f"• 仅更新错误记录: {'是' if errors_only else '否'}\n"
+            confirm_msg += f"• 批量大小: {batch_size}\n"
+            confirm_msg += f"• 批次间延迟: {delay}秒\n\n"
+            confirm_msg += f"注意：批量更新可能需要数小时完成，确定要开始吗？"
+
+            if not messagebox.askyesno("确认批量更新", confirm_msg):
+                return
+
+            # 清空日志
+            self.update_log_text.delete('1.0', tk.END)
+            self.add_update_log("开始批量更新...")
+
+            # 更新按钮状态
+            self.start_update_btn.configure(state='disabled')
+            self.pause_update_btn.configure(state='normal')
+            self.stop_update_btn.configure(state='normal')
+
+            # 创建批量更新管理器
+            self.batch_update_manager = BatchUpdateManager(
+                progress_callback=self.update_progress_callback,
+                status_callback=self.update_status_callback
+            )
+
+            # 创建过滤器函数
+            filter_func = None
+            if errors_only:
+                filter_func = lambda tariff: self._has_error_record(tariff['code'])
+
+            # 在后台线程中运行批量更新
+            self.update_thread = threading.Thread(
+                target=self._run_batch_update,
+                args=(update_uk, update_ni, batch_size, delay, filter_func),
+                daemon=True
+            )
+            self.update_thread.start()
+
+        except ValueError as e:
+            messagebox.showerror("错误", f"配置参数错误: {str(e)}")
+        except Exception as e:
+            logger.error(f"启动批量更新失败: {str(e)}")
+            messagebox.showerror("错误", f"启动批量更新失败: {str(e)}")
+
+    def _run_batch_update(self, update_uk, update_ni, batch_size, delay, filter_func):
+        """在后台线程中运行批量更新"""
+        try:
+            # 运行异步批量更新
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            stats = loop.run_until_complete(
+                self.batch_update_manager.update_all_tariffs(
+                    update_uk=update_uk,
+                    update_ni=update_ni,
+                    batch_size=batch_size,
+                    delay_between_batches=delay,
+                    filter_func=filter_func
+                )
+            )
+
+            # 在主线程中显示完成消息
+            self.root.after(0, self._show_batch_update_complete, stats)
+
+        except InterruptedError:
+            self.root.after(0, self._show_batch_update_cancelled)
+        except Exception as e:
+            logger.error(f"批量更新执行失败: {str(e)}")
+            self.root.after(0, self._show_batch_update_error, str(e))
+        finally:
+            # 恢复按钮状态
+            self.root.after(0, self._reset_update_buttons)
+
+    def update_progress_callback(self, completed, total, message=""):
+        """进度回调函数"""
+        def update_ui():
+            # 更新进度条
+            if total > 0:
+                progress_percent = (completed / total) * 100
+                self.overall_progress_var.set(progress_percent)
+                self.progress_label.configure(text=f"{completed}/{total} ({progress_percent:.1f}%)")
+
+            # 更新统计信息
+            stats = self.batch_update_manager.get_stats()
+            self.success_count_label.configure(text=str(stats['successful']))
+            self.failed_count_label.configure(text=str(stats['failed']))
+            self.skipped_count_label.configure(text=str(stats['skipped']))
+            self.uk_updated_label.configure(text=str(stats['uk_updated']))
+            self.ni_updated_label.configure(text=str(stats['ni_updated']))
+
+            # 更新速度显示
+            if 'rate' in stats:
+                self.speed_label.configure(text=f"{stats['rate']:.1f}条/分钟")
+
+            # 更新状态
+            if message:
+                self.update_status_var.set(message)
+
+        # 在主线程中更新UI
+        self.root.after(0, update_ui)
+
+    def update_status_callback(self, message):
+        """状态回调函数"""
+        def update_ui():
+            self.update_status_var.set(message)
+            self.add_update_log(f"[{self._get_current_time()}] {message}")
+
+        # 在主线程中更新UI
+        self.root.after(0, update_ui)
+
+    def add_update_log(self, message):
+        """添加更新日志"""
+        self.update_log_text.insert(tk.END, message + "\n")
+        self.update_log_text.see(tk.END)
+        self.update_log_text.update_idletasks()
+
+    def pause_batch_update(self):
+        """暂停批量更新"""
+        if self.batch_update_manager:
+            if self.batch_update_manager.is_paused:
+                self.batch_update_manager.resume()
+                self.pause_update_btn.configure(text="暂停")
+                self.add_update_log("批量更新已恢复")
+            else:
+                self.batch_update_manager.pause()
+                self.pause_update_btn.configure(text="恢复")
+                self.add_update_log("批量更新已暂停")
+
+    def stop_batch_update(self):
+        """停止批量更新"""
+        if self.batch_update_manager:
+            if messagebox.askyesno("确认停止", "确定要停止批量更新吗？已处理的进度将会保存。"):
+                self.batch_update_manager.cancel()
+                self.add_update_log("正在停止批量更新...")
+
+    def _has_error_record(self, code):
+        """检查是否有错误记录"""
+        try:
+            # 获取指定编码的错误记录
+            errors = self.db.get_scrape_errors(code)
+            return len(errors) > 0
+        except Exception:
+            return False
+
+    def _show_batch_update_complete(self, stats):
+        """显示批量更新完成"""
+        total_time = stats.get('elapsed_time', 0)
+        total_minutes = total_time / 60 if total_time > 0 else 0
+
+        message = f"批量更新完成！\n\n"
+        message += f"总用时: {total_minutes:.1f}分钟\n"
+        message += f"成功: {stats['successful']}\n"
+        message += f"失败: {stats['failed']}\n"
+        message += f"跳过: {stats['skipped']}\n"
+        message += f"英国更新: {stats['uk_updated']}\n"
+        message += f"北爱尔兰更新: {stats['ni_updated']}\n"
+
+        if stats['errors']:
+            message += f"\n错误数量: {len(stats['errors'])}"
+
+        messagebox.showinfo("批量更新完成", message)
+        self.add_update_log("="*50)
+        self.add_update_log("批量更新完成！")
+        self.add_update_log(f"总用时: {total_minutes:.1f}分钟")
+        self.add_update_log(f"成功: {stats['successful']}, 失败: {stats['failed']}, 跳过: {stats['skipped']}")
+        self.add_update_log("="*50)
+
+    def _show_batch_update_cancelled(self):
+        """显示批量更新取消"""
+        messagebox.showinfo("批量更新已取消", "批量更新已被用户取消")
+        self.add_update_log("批量更新已取消")
+
+    def _show_batch_update_error(self, error_msg):
+        """显示批量更新错误"""
+        messagebox.showerror("批量更新失败", f"批量更新过程中发生错误：\n{error_msg}")
+        self.add_update_log(f"错误: {error_msg}")
+
+    def _reset_update_buttons(self):
+        """重置更新按钮状态"""
+        self.start_update_btn.configure(state='normal')
+        self.pause_update_btn.configure(state='disabled', text="暂停")
+        self.stop_update_btn.configure(state='disabled')
+        self.overall_progress_var.set(0)
+        self.progress_label.configure(text="0/0 (0.0%)")
+
+    def export_error_report(self):
+        """导出错误报告"""
+        if not self.batch_update_manager:
+            messagebox.showwarning("警告", "没有可用的批量更新数据")
+            return
+
+        stats = self.batch_update_manager.get_stats()
+        if not stats['errors']:
+            messagebox.showinfo("提示", "没有错误记录可导出")
+            return
+
+        # 选择保存位置
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")],
+            initialfile=f"batch_update_errors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        )
+
+        if file_path:
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write("="*60 + "\n")
+                    f.write("批量更新错误报告\n")
+                    f.write(f"生成时间: {self._get_current_time()}\n")
+                    f.write("="*60 + "\n\n")
+
+                    f.write("统计信息:\n")
+                    f.write(f"  总数: {stats['total']}\n")
+                    f.write(f"  成功: {stats['successful']}\n")
+                    f.write(f"  失败: {stats['failed']}\n")
+                    f.write(f"  跳过: {stats['skipped']}\n")
+                    f.write(f"  英国更新: {stats['uk_updated']}\n")
+                    f.write(f"  北爱尔兰更新: {stats['ni_updated']}\n")
+                    f.write(f"  错误数量: {len(stats['errors'])}\n\n")
+
+                    f.write("错误详情:\n")
+                    f.write("-"*60 + "\n")
+                    for i, error in enumerate(stats['errors'], 1):
+                        f.write(f"{i}. {error}\n")
+
+                messagebox.showinfo("导出成功", f"错误报告已保存到:\n{file_path}")
+                self.add_update_log(f"错误报告已导出到: {file_path}")
+
+            except Exception as e:
+                logger.error(f"导出错误报告失败: {str(e)}")
+                messagebox.showerror("导出失败", f"导出错误报告失败: {str(e)}")
 
     def run(self):
         """运行GUI"""

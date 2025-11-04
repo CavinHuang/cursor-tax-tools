@@ -164,7 +164,7 @@ class TariffAPI:
         try:
             # 使用 TariffScraper 执行自动更新
             scraper = TariffScraper()
-            return scraper.auto_update_single(code, uk_url, ni_url)
+            return scraper.auto_update_single_sync(code, uk_url, ni_url)
         except Exception as e:
             logger.error(f"自动更新失败: {str(e)}")
             return {
