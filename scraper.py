@@ -24,7 +24,7 @@ class TariffScraper:
         logger.info(f"已存在 {len(self.existing_codes)} 条记录")
 
     async def scrape_with_retry(self, urls: List[str]) -> List[str]:
-        """带重试的抓取"""
+        """带重试的抓取 - 使用指数退避策略"""
         for retry in range(self.max_retries):
             try:
                 results = await scrape_urls(urls, headers=self.headers)
@@ -32,7 +32,9 @@ class TariffScraper:
                     return results
             except Exception as e:
                 logger.warning(f"第{retry + 1}次重试失败: {str(e)}")
-                await asyncio.sleep(1)  # 失败后等待1秒再重试
+                # 指数退避：1s, 2s, 4s, 8s, 最大10s
+                backoff_time = min(2 ** retry, 10)
+                await asyncio.sleep(backoff_time)
         return [""] * len(urls)
 
     def parse_section_links(self, html: str) -> List[str]:
@@ -503,6 +505,14 @@ class TariffScraper:
             # 判断总体成功状态（至少一个地区成功获取数据就算成功）
             overall_success = uk_success or ni_success
 
+            # 如果没有成功获取任何有效数据，记录错误
+            if not overall_success:
+                error_message = f"❌ 更新失败 | {' | '.join(status_messages)}"
+                try:
+                    self.db.add_scrape_error(code, error_message)
+                except Exception as db_error:
+                    logger.error(f"保存错误记录到数据库失败 {code}: {str(db_error)}")
+
             # 构建最终消息
             if any_updated:
                 if len(changed_parts) > 0:
@@ -668,7 +678,7 @@ class BatchUpdateManager:
         batch_results = []
 
         # 创建信号量控制并发数
-        semaphore = asyncio.Semaphore(10)  # 最多10个并发请求
+        semaphore = asyncio.Semaphore(20)  # 最多20个并发请求（提升并发性能）
 
         async def process_single_tariff(tariff):
             async with semaphore:
@@ -771,8 +781,8 @@ class BatchUpdateManager:
     async def update_all_tariffs(self,
                                update_uk=True,
                                update_ni=True,
-                               batch_size=50,
-                               delay_between_batches=1.0,
+                               batch_size=100,
+                               delay_between_batches=0.2,
                                filter_func=None):
         """批量更新所有关税数据
 

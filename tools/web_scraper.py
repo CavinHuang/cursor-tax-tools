@@ -8,7 +8,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-async def scrape_urls(urls: List[str], headers: Dict = None, max_concurrent: int = 3) -> List[Optional[str]]:
+async def scrape_urls(urls: List[str], headers: Dict = None, max_concurrent: int = 15) -> List[Optional[str]]:
     """异步抓取多个URL的内容"""
     if headers is None:
         headers = {}
@@ -30,7 +30,16 @@ async def scrape_urls(urls: List[str], headers: Dict = None, max_concurrent: int
         async with semaphore:
             return await fetch_url(session, url)
 
-    async with aiohttp.ClientSession() as session:
+    # 使用连接池优化性能
+    connector = aiohttp.TCPConnector(
+        limit=50,  # 总连接池大小
+        limit_per_host=20,  # 每个主机的连接数
+        ttl_dns_cache=300,  # DNS缓存5分钟
+        use_dns_cache=True,
+    )
+    timeout = aiohttp.ClientTimeout(total=60, connect=20)  # 设置超时（增加以应对慢速连接）
+
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         tasks = [bounded_fetch(session, url) for url in urls]
         return await asyncio.gather(*tasks)
 

@@ -920,7 +920,7 @@ class TariffGUI:
         batch_size_frame = ttk.Frame(advanced_frame)
         batch_size_frame.pack(fill=tk.X, padx=5, pady=2)
         ttk.Label(batch_size_frame, text="批量大小:").pack(side=tk.LEFT)
-        self.batch_size_var = tk.StringVar(value="50")
+        self.batch_size_var = tk.StringVar(value="100")
         batch_size_spin = ttk.Spinbox(
             batch_size_frame,
             from_=10,
@@ -934,7 +934,7 @@ class TariffGUI:
         delay_frame = ttk.Frame(advanced_frame)
         delay_frame.pack(fill=tk.X, padx=5, pady=2)
         ttk.Label(delay_frame, text="批次间延迟(秒):").pack(side=tk.LEFT)
-        self.delay_var = tk.StringVar(value="1.0")
+        self.delay_var = tk.StringVar(value="0.2")
         delay_spin = ttk.Spinbox(
             delay_frame,
             from_=0.1,
