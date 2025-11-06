@@ -10,7 +10,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class TariffScraper:
-    def __init__(self):
+    def __init__(self, proxy: str = None):
+        """初始化TariffScraper
+
+        Args:
+            proxy: 代理服务器地址，格式：http://host:port 或 socks5://host:port
+        """
         self.base_url = "https://www.trade-tariff.service.gov.uk"
         self.browse_url = f"{self.base_url}/browse"
         self.visited_urls: Set[str] = set()
@@ -19,15 +24,18 @@ class TariffScraper:
         }
         self.timeout = 30  # 请求超时时间
         self.max_retries = 3  # 最大重试次数
+        self.proxy = proxy  # 代理服务器
         self.db = TariffDB()
         self.existing_codes = self.db.get_existing_codes()  # 获取已存在的编码
         logger.info(f"已存在 {len(self.existing_codes)} 条记录")
+        if proxy:
+            logger.info(f"使用代理: {proxy}")
 
     async def scrape_with_retry(self, urls: List[str]) -> List[str]:
         """带重试的抓取 - 使用指数退避策略"""
         for retry in range(self.max_retries):
             try:
-                results = await scrape_urls(urls, headers=self.headers)
+                results = await scrape_urls(urls, headers=self.headers, proxy=self.proxy)
                 if any(results):  # 只要有一个成功就返回
                     return results
             except Exception as e:
@@ -605,17 +613,19 @@ class TariffScraper:
 class BatchUpdateManager:
     """批量更新管理器 - 支持批量更新所有关税数据"""
 
-    def __init__(self, progress_callback=None, status_callback=None):
+    def __init__(self, progress_callback=None, status_callback=None, proxy: str = None):
         """初始化批量更新管理器
 
         Args:
             progress_callback: 进度回调函数 (completed, total, message)
             status_callback: 状态回调函数 (message)
+            proxy: 代理服务器地址，格式：http://host:port 或 socks5://host:port
         """
-        self.scraper = TariffScraper()
+        self.scraper = TariffScraper(proxy=proxy)
         self.db = TariffDB()
         self.progress_callback = progress_callback
         self.status_callback = status_callback
+        self.proxy = proxy  # 保存代理设置
 
         # 控制状态
         self.is_paused = False

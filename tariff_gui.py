@@ -945,6 +945,35 @@ class TariffGUI:
         )
         delay_spin.pack(side=tk.LEFT, padx=(5, 20))
 
+        # 代理设置
+        proxy_frame = ttk.Frame(advanced_frame)
+        proxy_frame.pack(fill=tk.X, padx=5, pady=2)
+
+        # 代理启用开关
+        self.proxy_enabled_var = tk.BooleanVar(value=False)
+        proxy_check = ttk.Checkbutton(
+            proxy_frame,
+            text="使用代理:",
+            variable=self.proxy_enabled_var,
+            command=self._toggle_proxy_input
+        )
+        proxy_check.pack(side=tk.LEFT)
+
+        # 代理地址输入框
+        self.proxy_var = tk.StringVar(value="http://127.0.0.1:7890")
+        self.proxy_entry = ttk.Entry(
+            proxy_frame,
+            textvariable=self.proxy_var,
+            width=30,
+            state='disabled'  # 默认禁用
+        )
+        self.proxy_entry.pack(side=tk.LEFT, padx=(5, 5))
+        ttk.Label(
+            proxy_frame,
+            text="(例如: http://127.0.0.1:7890)",
+            font=('', 8)
+        ).pack(side=tk.LEFT)
+
         # 控制按钮框架
         control_frame = ttk.Frame(config_frame)
         control_frame.pack(fill=tk.X, padx=5, pady=10)
@@ -1066,12 +1095,24 @@ class TariffGUI:
         self.batch_update_manager = None
         self.update_thread = None
 
+    def _toggle_proxy_input(self):
+        """切换代理输入框的启用状态"""
+        if self.proxy_enabled_var.get():
+            self.proxy_entry.configure(state='normal')
+        else:
+            self.proxy_entry.configure(state='disabled')
+
     def start_batch_update(self):
         """开始批量更新"""
         try:
             # 验证配置
             batch_size = int(self.batch_size_var.get())
             delay = float(self.delay_var.get())
+
+            # 只有在启用代理开关时才使用代理
+            proxy = None
+            if self.proxy_enabled_var.get():
+                proxy = self.proxy_var.get().strip()
 
             if batch_size < 1 or batch_size > 200:
                 messagebox.showerror("错误", "批量大小必须在1-200之间")
@@ -1080,6 +1121,12 @@ class TariffGUI:
             if delay < 0.1 or delay > 10.0:
                 messagebox.showerror("错误", "批次间延迟必须在0.1-10秒之间")
                 return
+
+            # 验证代理格式（如果启用了代理）
+            if proxy:
+                if not (proxy.startswith('http://') or proxy.startswith('https://') or proxy.startswith('socks5://')):
+                    messagebox.showerror("错误", "代理地址格式错误，应为 http://host:port 或 socks5://host:port")
+                    return
 
             # 确认对话框
             update_uk = self.update_uk_var.get()
@@ -1096,8 +1143,10 @@ class TariffGUI:
             confirm_msg += f"• 更新北爱尔兰税率: {'是' if update_ni else '否'}\n"
             confirm_msg += f"• 仅更新错误记录: {'是' if errors_only else '否'}\n"
             confirm_msg += f"• 批量大小: {batch_size}\n"
-            confirm_msg += f"• 批次间延迟: {delay}秒\n\n"
-            confirm_msg += f"注意：批量更新可能需要数小时完成，确定要开始吗？"
+            confirm_msg += f"• 批次间延迟: {delay}秒\n"
+            if proxy:
+                confirm_msg += f"• 代理服务器: {proxy}\n"
+            confirm_msg += f"\n注意：批量更新可能需要数小时完成，确定要开始吗？"
 
             if not messagebox.askyesno("确认批量更新", confirm_msg):
                 return
@@ -1105,16 +1154,19 @@ class TariffGUI:
             # 清空日志
             self.update_log_text.delete('1.0', tk.END)
             self.add_update_log("开始批量更新...")
+            if proxy:
+                self.add_update_log(f"使用代理: {proxy}")
 
             # 更新按钮状态
             self.start_update_btn.configure(state='disabled')
             self.pause_update_btn.configure(state='normal')
             self.stop_update_btn.configure(state='normal')
 
-            # 创建批量更新管理器
+            # 创建批量更新管理器（传递代理参数）
             self.batch_update_manager = BatchUpdateManager(
                 progress_callback=self.update_progress_callback,
-                status_callback=self.update_status_callback
+                status_callback=self.update_status_callback,
+                proxy=proxy if proxy else None  # 传递代理参数
             )
 
             # 创建过滤器函数
