@@ -9,14 +9,13 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-async def scrape_urls(urls: List[str], headers: Dict = None, max_concurrent: int = 15, proxy: str = None) -> List[Optional[str]]:
+async def scrape_urls(urls: List[str], headers: Dict = None, max_concurrent: int = 15) -> List[Optional[str]]:
     """异步抓取多个URL的内容
 
     Args:
         urls: 要抓取的URL列表
         headers: 请求头
         max_concurrent: 最大并发数
-        proxy: 代理服务器地址，格式：http://host:port 或 socks5://host:port
     """
     if headers is None:
         headers = {}
@@ -28,8 +27,7 @@ async def scrape_urls(urls: List[str], headers: Dict = None, max_concurrent: int
 
     async def fetch_url(session: aiohttp.ClientSession, url: str) -> Optional[str]:
         try:
-            # 在请求时也传递 ssl 参数（完全禁用 SSL 验证）
-            async with session.get(url, headers=headers, proxy=proxy, ssl=False) as response:
+            async with session.get(url, headers=headers, ssl=False) as response:
                 if response.status == 200:
                     return await response.text()
                 logger.error(f"抓取失败 {url}: 状态码 {response.status}")
@@ -54,7 +52,7 @@ async def scrape_urls(urls: List[str], headers: Dict = None, max_concurrent: int
     )
     timeout = aiohttp.ClientTimeout(total=60, connect=20)  # 设置超时（增加以应对慢速连接）
 
-    async with aiohttp.ClientSession(connector=connector, timeout=timeout, trust_env=True) as session:
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         tasks = [bounded_fetch(session, url) for url in urls]
         return await asyncio.gather(*tasks)
 
