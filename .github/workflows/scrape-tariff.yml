@@ -59,5 +59,7 @@ jobs:
       with:
         body: '关税数据更新'
         files: tariffs.db
+        tag_name: tariff-v${{ github.run_number }}
+        name: 关税数据 - ${{ github.run_number }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
