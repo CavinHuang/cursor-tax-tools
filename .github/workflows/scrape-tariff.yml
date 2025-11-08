@@ -1,0 +1,63 @@
+name: 爬取关税数据
+
+on:
+  workflow_dispatch:
+    inputs:
+      batch_size:
+        description: '批量大小'
+        required: false
+        default: '100'
+      delay:
+        description: '批次间延迟(秒)'
+        required: false
+        default: '0.2'
+      update_uk:
+        description: '更新英国税率'
+        required: false
+        default: 'true'
+      update_ni:
+        description: '更新北爱尔兰税率'
+        required: false
+        default: 'true'
+
+  schedule:
+    - cron: '0 4 1 * *'
+
+permissions:
+  contents: write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 设置Python环境
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: 安装依赖
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: 执行爬虫
+      env:
+        PYTHONIOENCODING: utf-8
+        PYTHONUTF8: 1
+      run: |
+        python -c "
+        import asyncio
+        from scraper import BatchUpdateManager
+        asyncio.run(BatchUpdateManager().update_all_tariffs())
+        "
+
+    - name: 创建Release
+      uses: softprops/action-gh-release@v1
+      with:
+        body: '关税数据更新'
+        files: tariffs.db
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
