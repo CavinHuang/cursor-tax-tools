@@ -23,10 +23,11 @@ class TariffScraper:
         }
         self.timeout = 30  # 请求超时时间
         self.max_retries = 3  # 最大重试次数
-self.db = TariffDB()
+        self.db = TariffDB()
         self.existing_codes = self.db.get_existing_codes()  # 获取已存在的编码
         logger.info(f"已存在 {len(self.existing_codes)} 条记录")
-async def scrape_with_retry(self, urls: List[str]) -> List[str]:
+
+    async def scrape_with_retry(self, urls: List[str]) -> List[str]:
         """带重试的抓取 - 使用指数退避策略"""
         for retry in range(self.max_retries):
             try:

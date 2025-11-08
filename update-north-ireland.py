@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 class Scraper:
   def __init__(self):
-  """初始化Scraper"""
+    """初始化Scraper"""
     self.base_url = "https://www.trade-tariff.service.gov.uk/xi/commodities"
     self.browse_url = f"{self.base_url}/browse"
     self.visited_urls: Set[str] = set()
@@ -22,10 +22,11 @@ class Scraper:
     }
     self.timeout = 30  # 请求超时时间
     self.max_retries = 5 # 最大重试次数
-self.db = TariffDB()
+    self.db = TariffDB()
     self.existing_codes = self.db.get_existing_codes_north_ireland()  # 获取已存在的北爱尔兰编码
     logger.info(f"已存在 {len(self.existing_codes)} 条记录")
-async def scrape_with_retry(self, urls: List[str]) -> List[str]:
+
+  async def scrape_with_retry(self, urls: List[str]) -> List[str]:
         """带重试的抓取"""
         logger.info(f"正在抓取 {len(urls)} 个北爱尔兰关税数据")
         logger.info(f"正在抓取 {self.timeout} 秒")
