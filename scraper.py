@@ -27,19 +27,23 @@ class TariffScraper:
         self.existing_codes = self.db.get_existing_codes()  # 获取已存在的编码
         logger.info(f"已存在 {len(self.existing_codes)} 条记录")
 
-    async def scrape_with_retry(self, urls: List[str]) -> List[str]:
-        """带重试的抓取 - 使用指数退避策略"""
+    async def scrape_with_retry(self, urls: List[str]) -> List[tuple]:
+        """带重试的抓取 - 使用指数退避策略
+        返回: List[tuple], 每个元素是 (status_code, content) 元组
+        """
         for retry in range(self.max_retries):
             try:
                 results = await scrape_urls(urls, headers=self.headers)
-                if any(results):  # 只要有一个成功就返回
+                # 检查是否有成功的状态码
+                if any(status == 200 for status, _ in results):
                     return results
             except Exception as e:
                 logger.warning(f"第{retry + 1}次重试失败: {str(e)}")
                 # 指数退避：1s, 2s, 4s, 8s, 最大10s
                 backoff_time = min(2 ** retry, 10)
                 await asyncio.sleep(backoff_time)
-        return [""] * len(urls)
+        # 返回404状态码的元组
+        return [(404, "") for _ in urls]
 
     def parse_section_links(self, html: str) -> List[str]:
         """解析主页面获取section链接"""
@@ -177,27 +181,44 @@ class TariffScraper:
                         break
 
                 if duty_rate_idx is not None:
-                    # 查找包含"All countries"或"United Kingdom"的行
+                    # 查找包含"All countries"、"United Kingdom"或"Other"的行
                     rows = table.find_all('tr')
                     for row in rows:
                         cells = row.find_all(['td', 'th'])
                         if cells and len(cells) > duty_rate_idx:
                             country_cell = cells[0].get_text(strip=True)
-                            if "All countries" in country_cell or "United Kingdom" in country_cell:
-                                # 使用更精确的CSS选择器提取税率
-                                duty_rate_elem = cells[duty_rate_idx].find('span', class_='duty-expression')
+
+                            # 提取税率值的通用函数
+                            def extract_rate(cell):
+                                duty_rate_elem = cell.find('span', class_='duty-expression')
                                 if duty_rate_elem:
                                     # 找到嵌套的span中的税率值
                                     rate_span = duty_rate_elem.find('span')
-                                    duty_rate = rate_span.get_text(strip=True) if rate_span else duty_rate_elem.get_text(strip=True)
+                                    return rate_span.get_text(strip=True) if rate_span else duty_rate_elem.get_text(strip=True)
                                 else:
                                     # 备用方法：直接获取文本
-                                    duty_rate = cells[duty_rate_idx].get_text(strip=True)
+                                    return cell.get_text(strip=True)
 
+                            # 处理United Kingdom或All countries（一般税率）
+                            if "All countries" in country_cell or "United Kingdom" in country_cell:
+                                duty_rate = extract_rate(cells[duty_rate_idx])
                                 result['rate'] = duty_rate
-                                logger.debug(f"找到税率: {duty_rate}")
+                                logger.debug(f"找到一般税率: {duty_rate}")
                                 found_rate = True
-                                break
+                                # 继续查找Other税率
+                                continue
+
+                            # 处理Other地区
+                            elif "Other" in country_cell:
+                                other_rate = extract_rate(cells[duty_rate_idx])
+                                result['other_rate'] = other_rate
+                                logger.debug(f"找到Other税率: {other_rate}")
+
+                    # 如果没有找到一般税率，尝试从Other中获取
+                    if not found_rate and result.get('other_rate'):
+                        result['rate'] = result['other_rate']
+                        found_rate = True
+                        logger.debug(f"使用Other税率作为一般税率: {result['other_rate']}")
 
             if 'rate' not in result and result.get('code'):
                 error_msg = f"未找到税率 for code: {result.get('code')}"
@@ -235,12 +256,13 @@ class TariffScraper:
         try:
             # 1. 获取section列表
             logger.info(f"开始抓取主页面: {self.browse_url}")
-            content = await self.scrape_with_retry([self.browse_url])
-            if not content or not content[0]:
+            results = await self.scrape_with_retry([self.browse_url])
+            status, content = results[0]
+            if status != 200 or not content:
                 logger.error("无法访问主页面")
                 return []
 
-            section_urls = self.parse_section_links(content[0])
+            section_urls = self.parse_section_links(content)
             if not section_urls:
                 logger.error("未找到任何section链接")
                 return []
@@ -251,10 +273,10 @@ class TariffScraper:
                 batch_urls = section_urls[i:i + batch_size]
                 logger.info(f"正在处理第 {i//batch_size + 1} 批section，共 {len(batch_urls)} 个")
 
-                section_contents = await self.scrape_with_retry(batch_urls)
+                section_results = await self.scrape_with_retry(batch_urls)
                 chapter_urls = []
-                for content in section_contents:
-                    if content:
+                for status, content in section_results:
+                    if status == 200 and content:
                         urls = self.parse_chapter_links(content)
                         chapter_urls.extend(urls)
 
@@ -263,10 +285,10 @@ class TariffScraper:
                     chapter_batch = chapter_urls[j:j + batch_size]
                     logger.info(f"正在处理第 {j//batch_size + 1} 批chapter，共 {len(chapter_batch)} 个")
 
-                    chapter_contents = await self.scrape_with_retry(chapter_batch)
+                    chapter_results = await self.scrape_with_retry(chapter_batch)
                     heading_urls = []
-                    for content in chapter_contents:
-                        if content:
+                    for status, content in chapter_results:
+                        if status == 200 and content:
                             urls = self.parse_heading_links(content)
                             heading_urls.extend(urls)
 
@@ -275,10 +297,10 @@ class TariffScraper:
                         heading_batch = heading_urls[k:k + batch_size]
                         logger.info(f"正在处理第 {k//batch_size + 1} 批heading，共 {len(heading_batch)} 个")
 
-                        heading_contents = await self.scrape_with_retry(heading_batch)
+                        heading_results = await self.scrape_with_retry(heading_batch)
                         commodity_urls = []
-                        for content in heading_contents:
-                            if content:
+                        for status, content in heading_results:
+                            if status == 200 and content:
                                 urls = self.parse_commodity_links(content)
                                 commodity_urls.extend(urls)
 
@@ -287,14 +309,42 @@ class TariffScraper:
                             commodity_batch = commodity_urls[m:m + batch_size]
                             logger.info(f"正在处理第 {m//batch_size + 1} 批commodity，共 {len(commodity_batch)} 个")
 
-                            commodity_contents = await self.scrape_with_retry(commodity_batch)
+                            commodity_results = await self.scrape_with_retry(commodity_batch)
                             batch_tariffs = []
+                            codes_to_delete = []
+                            codes_to_clear_errors = []
 
-                            for n, content in enumerate(commodity_contents):
-                                if content:
+                            for n, (status, content) in enumerate(commodity_results):
+                                if status == 404:
+                                    # 404状态，提取code并标记删除
+                                    code_match = re.search(r'/commodities/(\d+)', commodity_batch[n])
+                                    if code_match:
+                                        code = code_match.group(1)
+                                        codes_to_delete.append(code)
+
+                                        # 如果是在仅更新错误记录模式下，先清理error记录
+                                        if filter_func:
+                                            codes_to_clear_errors.append(code)
+                                            logger.info(f"发现404状态（在错误更新模式下），标记清理error记录: {code}")
+                                        else:
+                                            logger.info(f"发现404状态，标记删除商品编码: {code}")
+                                elif status == 200 and content:
+                                    # 正常状态，解析内容
                                     tariff = self.parse_commodity_page(content, url=commodity_batch[n])
                                     if tariff:
                                         batch_tariffs.append(tariff)
+
+                            # 清理404记录的error数据（仅在错误更新模式下）
+                            if codes_to_clear_errors:
+                                for code in codes_to_clear_errors:
+                                    self.db.clear_scrape_error(code)
+                                logger.info(f"已清理 {len(codes_to_clear_errors)} 条404记录的error数据")
+
+                            # 删除404的记录
+                            if codes_to_delete:
+                                for code in codes_to_delete:
+                                    self.db.delete_tariff(code)
+                                logger.info(f"已删除 {len(codes_to_delete)} 条404记录")
 
                             # 直接保存这一批数据
                             if batch_tariffs:
@@ -324,7 +374,8 @@ class TariffScraper:
                     code=tariff['code'],
                     description=tariff['description'],
                     rate=tariff['rate'],
-                    url=tariff.get('url')
+                    url=tariff.get('url'),
+                    other_rate=tariff.get('other_rate')
                 )
                 self.existing_codes.add(tariff['code'])  # 更新已存在编码集合
                 saved_count += 1
@@ -395,10 +446,12 @@ class TariffScraper:
                 async def fetch_uk_data():
                     """抓取并解析英国数据"""
                     try:
-                        content_list = await self.scrape_with_retry([uk_url])
-                        content = content_list[0] if content_list else ""
-                        if not content:
-                            return None, "英国网页内容为空"
+                        results = await self.scrape_with_retry([uk_url])
+                        status, content = results[0]
+                        if status != 200 or not content:
+                            if status == 404:
+                                return None, None  # 404不记录错误
+                            return None, f"英国网页内容为空（状态码: {status}）"
                         return temp_parser.parse_commodity_page(content, uk_url), None
                     except Exception as e:
                         return None, f"英国数据抓取失败: {str(e)}"
@@ -408,10 +461,12 @@ class TariffScraper:
                     if not ni_url:
                         return None, "未提供北爱尔兰URL"
                     try:
-                        content_list = await self.scrape_with_retry([ni_url])
-                        content = content_list[0] if content_list else ""
-                        if not content:
-                            return None, "北爱尔兰网页内容为空"
+                        results = await self.scrape_with_retry([ni_url])
+                        status, content = results[0]
+                        if status != 200 or not content:
+                            if status == 404:
+                                return None, None  # 404不记录错误
+                            return None, f"北爱尔兰网页内容为空（状态码: {status}）"
                         return temp_parser.parse_commodity_page(content, ni_url), None
                     except Exception as e:
                         return None, f"北爱尔兰数据抓取失败: {str(e)}"
@@ -433,6 +488,25 @@ class TariffScraper:
 
             uk_data_parsed, uk_error = uk_result if isinstance(uk_result, tuple) else (None, "英国数据解析异常")
             ni_data_parsed, ni_error = ni_result if isinstance(ni_result, tuple) else (None, "北爱尔兰数据解析异常")
+
+            # 处理404状态 - 如果两个地区都是404，删除记录
+            if uk_error is None and (ni_error is None or ni_error == "未提供北爱尔兰URL"):
+                logger.info(f"商品编码 {code} 在所有地区都返回404，删除记录")
+                # 先清理error记录（防止循环操作）
+                self.db.clear_scrape_error(code)
+                # 然后删除记录
+                self.db.delete_tariff(code)
+                return {
+                    'overall_success': True,
+                    'uk_success': False,
+                    'ni_success': False,
+                    'uk_updated': False,
+                    'ni_updated': False,
+                    'message': f'商品编码 {code} 已不存在，已删除记录',
+                    'old_data': old_data,
+                    'new_data': None,
+                    'updated': False
+                }
 
             uk_success = uk_data_parsed is not None
             ni_success = ni_data_parsed is not None

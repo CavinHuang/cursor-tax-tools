@@ -1073,7 +1073,7 @@ class TariffGUI:
             batch_size = int(self.batch_size_var.get())
             delay = float(self.delay_var.get())
 
-if batch_size < 1 or batch_size > 200:
+            if batch_size < 1 or batch_size > 200:
                 messagebox.showerror("错误", "批量大小必须在1-200之间")
                 return
 
@@ -1081,10 +1081,17 @@ if batch_size < 1 or batch_size > 200:
                 messagebox.showerror("错误", "批次间延迟必须在0.1-10秒之间")
                 return
 
-# 确认对话框
+            # 确认对话框
             update_uk = self.update_uk_var.get()
             update_ni = self.update_ni_var.get()
             errors_only = self.update_errors_only_var.get()
+
+            # 如果只选择"仅更新错误记录"，自动勾选更新选项
+            if errors_only and not update_uk and not update_ni:
+                update_uk = True
+                update_ni = True
+                self.update_uk_var.set(True)
+                self.update_ni_var.set(True)
 
             if not update_uk and not update_ni:
                 messagebox.showwarning("警告", "请至少选择一个更新选项")
@@ -1105,7 +1112,7 @@ if batch_size < 1 or batch_size > 200:
             # 清空日志
             self.update_log_text.delete('1.0', tk.END)
             self.add_update_log("开始批量更新...")
-# 更新按钮状态
+            # 更新按钮状态
             self.start_update_btn.configure(state='disabled')
             self.pause_update_btn.configure(state='normal')
             self.stop_update_btn.configure(state='normal')

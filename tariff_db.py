@@ -29,9 +29,13 @@ class TariffDB:
                     rate TEXT,
                     url TEXT,
                     north_ireland_rate TEXT,
-                    north_ireland_url TEXT
+                    north_ireland_url TEXT,
+                    other_rate TEXT
                 )
                 """)
+                # 为现有表添加other_rate字段
+                self.conn.execute("ALTER TABLE tariffs ADD COLUMN other_rate TEXT")
+                self.conn.execute("CREATE INDEX IF NOT EXISTS idx_code ON tariffs(code)")
                 # 添加错误记录表
                 self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS scrape_errors (
@@ -46,15 +50,15 @@ class TariffDB:
             logger.error(f"创建表失败: {str(e)}")
             raise
 
-    def add_tariff(self, code: str, description: str, rate: str, url: str = None):
+    def add_tariff(self, code: str, description: str, rate: str, url: str = None, other_rate: str = None):
         """添加关税记录"""
         if url is None:
             url = f"https://www.trade-tariff.service.gov.uk/commodities/{code}"
         try:
             with self.conn:
                 self.conn.execute(
-                    "INSERT OR REPLACE INTO tariffs (code, description, rate, url) VALUES (?, ?, ?, ?)",
-                    (code, description, rate, url)
+                    "INSERT OR REPLACE INTO tariffs (code, description, rate, url, other_rate) VALUES (?, ?, ?, ?, ?)",
+                    (code, description, rate, url, other_rate)
                 )
         except Exception as e:
             logger.error(f"添加记录失败: {str(e)}")
@@ -64,7 +68,7 @@ class TariffDB:
         """精确查询关税记录"""
         try:
             cur = self.conn.execute(
-                "SELECT code, description, rate, url, north_ireland_rate, north_ireland_url FROM tariffs WHERE code = ?",
+                "SELECT code, description, rate, url, north_ireland_rate, north_ireland_url, other_rate FROM tariffs WHERE code = ?",
                 (code,)
             )
             row = cur.fetchone()
@@ -75,7 +79,8 @@ class TariffDB:
                     'rate': row[2],
                     'url': row[3],
                     'north_ireland_rate': row[4],
-                    'north_ireland_url': row[5]
+                    'north_ireland_url': row[5],
+                    'other_rate': row[6]
                 }
             return None
         except Exception as e:
@@ -115,8 +120,8 @@ class TariffDB:
         try:
             with self.conn:
                 self.conn.executemany(
-                    "INSERT OR REPLACE INTO tariffs (code, description, rate, url) VALUES (?, ?, ?, ?)",
-                    [(t['code'], t['description'], t['rate'], t.get('url')) for t in tariffs]
+                    "INSERT OR REPLACE INTO tariffs (code, description, rate, url, other_rate) VALUES (?, ?, ?, ?, ?)",
+                    [(t['code'], t['description'], t['rate'], t.get('url'), t.get('other_rate')) for t in tariffs]
                 )
         except Exception as e:
             logger.error(f"批量添加记录失败: {str(e)}")
@@ -158,7 +163,7 @@ class TariffDB:
             raise
 
     def update_tariff(self, code: str, description: str = None, rate: str = None, url: str = None,
-                      north_ireland_rate: str = None, north_ireland_url: str = None):
+                      north_ireland_rate: str = None, north_ireland_url: str = None, other_rate: str = None):
         """更新关税记录（支持部分字段更新）"""
         try:
             # 构建动态更新SQL
@@ -180,6 +185,9 @@ class TariffDB:
             if north_ireland_url is not None:
                 updates.append("north_ireland_url = ?")
                 params.append(north_ireland_url)
+            if other_rate is not None:
+                updates.append("other_rate = ?")
+                params.append(other_rate)
 
             if not updates:
                 logger.warning("没有提供任何要更新的字段")
@@ -193,6 +201,19 @@ class TariffDB:
             logger.info(f"成功更新商品编码 {code} 的记录")
         except Exception as e:
             logger.error(f"更新关税记录失败: {str(e)}")
+            raise
+
+    def delete_tariff(self, code: str):
+        """删除关税记录"""
+        try:
+            with self.conn:
+                # 删除tariffs表中的记录
+                self.conn.execute("DELETE FROM tariffs WHERE code = ?", (code,))
+                # 同时删除scrape_errors表中的错误记录
+                self.conn.execute("DELETE FROM scrape_errors WHERE code = ?", (code,))
+            logger.info(f"已删除商品编码 {code} 的记录")
+        except Exception as e:
+            logger.error(f"删除关税记录失败: {str(e)}")
             raise
 
     def add_scrape_error(self, code: str, error_message: str):

@@ -26,19 +26,22 @@ class Scraper:
     self.existing_codes = self.db.get_existing_codes_north_ireland()  # 获取已存在的北爱尔兰编码
     logger.info(f"已存在 {len(self.existing_codes)} 条记录")
 
-  async def scrape_with_retry(self, urls: List[str]) -> List[str]:
-        """带重试的抓取"""
+  async def scrape_with_retry(self, urls: List[str]) -> List[tuple]:
+        """带重试的抓取
+        返回: List[tuple], 每个元素是 (status_code, content) 元组
+        """
         logger.info(f"正在抓取 {len(urls)} 个北爱尔兰关税数据")
-        logger.info(f"正在抓取 {self.timeout} 秒")
         for retry in range(self.max_retries):
             try:
                 results = await scrape_urls(urls, headers=self.headers)
-                if any(results):  # 只要有一个成功就返回
+                # 检查是否有成功的状态码
+                if any(status == 200 for status, _ in results):
                     return results
             except Exception as e:
                 logger.warning(f"第{retry + 1}次重试失败: {str(e)}")
                 await asyncio.sleep(1)  # 失败后等待1秒再重试
-        return [""] * len(urls)
+        # 返回404状态码的元组
+        return [(404, "") for _ in urls]
 
   def parse_commodity_page(self, html: str, url: str = "") -> Dict:
     """解析commodity页面获取税率信息"""
@@ -128,14 +131,39 @@ class Scraper:
 
         commodity_batch_urls = [tariff['north_ireland_url'] or f"{self.base_url}/{tariff['code']}" for tariff in commodity_batch]
 
-        commodity_contents = await self.scrape_with_retry(commodity_batch_urls)
+        commodity_results = await self.scrape_with_retry(commodity_batch_urls)
         batch_tariffs = []
+        codes_to_delete = []
 
-        for n, content in enumerate(commodity_contents):
-          if content:
+        for n, (status, content) in enumerate(commodity_results):
+          if status == 404:
+            # 404状态，提取code并标记删除
+            code_match = re.search(r'/commodities/(\d+)', commodity_batch_urls[n])
+            if code_match:
+              code = code_match.group(1)
+              codes_to_delete.append(code)
+              logger.info(f"发现404状态，标记删除商品编码: {code}")
+          elif status == 200 and content:
+            # 正常状态，解析内容
             tariff = self.parse_commodity_page(content, url=commodity_batch_urls[n])
             if tariff:
               batch_tariffs.append(tariff)
+
+        # 清理404记录的error数据
+        if codes_to_delete:
+          for code in codes_to_delete:
+            # 先清理error记录（防止循环操作）
+            try:
+              self.db.clear_scrape_error(code)
+            except:
+              pass  # 如果清理失败，继续删除记录
+          logger.info(f"已清理 {len(codes_to_delete)} 条404记录的error数据")
+
+        # 删除404的记录
+        if codes_to_delete:
+          for code in codes_to_delete:
+            self.db.delete_tariff(code)
+          logger.info(f"已删除 {len(codes_to_delete)} 条404记录")
 
         if batch_tariffs:
           self.update_tariffs(batch_tariffs)

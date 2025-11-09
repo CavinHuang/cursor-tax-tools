@@ -9,13 +9,18 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-async def scrape_urls(urls: List[str], headers: Dict = None, max_concurrent: int = 15) -> List[Optional[str]]:
+async def scrape_urls(urls: List[str], headers: Dict = None, max_concurrent: int = 15) -> List[tuple]:
     """异步抓取多个URL的内容
 
     Args:
         urls: 要抓取的URL列表
         headers: 请求头
         max_concurrent: 最大并发数
+
+    Returns:
+        List[tuple]: 每个元素是 (status_code, content) 元组
+                      status_code: HTTP状态码
+                      content: 页面内容（如果状态码不是200，则为None）
     """
     if headers is None:
         headers = {}
@@ -25,16 +30,19 @@ async def scrape_urls(urls: List[str], headers: Dict = None, max_concurrent: int
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
 
-    async def fetch_url(session: aiohttp.ClientSession, url: str) -> Optional[str]:
+    async def fetch_url(session: aiohttp.ClientSession, url: str) -> tuple:
         try:
             async with session.get(url, headers=headers, ssl=False) as response:
-                if response.status == 200:
-                    return await response.text()
-                logger.error(f"抓取失败 {url}: 状态码 {response.status}")
-                return None
+                status = response.status
+                if status == 200:
+                    content = await response.text()
+                    return (status, content)
+                else:
+                    logger.warning(f"抓取 {url}: 状态码 {status}")
+                    return (status, None)
         except Exception as e:
             logger.error(f"抓取失败 {url}: {str(e)}")
-            return None
+            return (0, None)
 
     semaphore = asyncio.Semaphore(max_concurrent)
 

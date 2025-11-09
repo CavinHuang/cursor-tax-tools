@@ -47,12 +47,9 @@ jobs:
       env:
         PYTHONIOENCODING: utf-8
         PYTHONUTF8: 1
+        NUMEXPR_MAX_THREADS: 8
       run: |
-        python -c "
-        import asyncio
-        from scraper import BatchUpdateManager
-        asyncio.run(BatchUpdateManager().update_all_tariffs())
-        "
+        python -c "import asyncio, os; from scraper import BatchUpdateManager; update_uk = os.getenv('INPUT_UPDATE_UK', 'true') == 'true'; update_ni = os.getenv('INPUT_UPDATE_NI', 'true') == 'true'; errors_only = os.getenv('INPUT_ERRORS_ONLY', 'false') == 'true'; mgr = BatchUpdateManager(); print('开始爬取任务...'); print(f'更新英国: {update_uk}, 北爱尔兰: {update_ni}, 仅错误: {errors_only}'); asyncio.run(mgr.update_all_tariffs(update_uk=update_uk, update_ni=update_ni))"
 
     - name: 创建Release
       uses: softprops/action-gh-release@v1
