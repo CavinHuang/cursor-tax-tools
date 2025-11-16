@@ -1,0 +1,47 @@
+{
+  "version": "data-123",
+  "timestamp": "2025-01-16T10:30:00Z",
+  "last_modified": "2025-01-16T10:30:00Z",
+  "file_size": 8254756,
+  "file_hash": "sha256:abc123def456...",
+  "record_count": 156789,
+  "changes_summary": {
+    "total_updates": 1250,
+    "uk_updated": 890,
+    "ni_updated": 360,
+    "new_records": 15,
+    "deleted_records": 3,
+    "modified_records": 1232
+  },
+  "update_statistics": {
+    "success_rate": 0.987,
+    "processing_time_minutes": 45.2,
+    "errors_count": 12,
+    "retry_count": 8
+  },
+  "data_ranges": {
+    "uk_rate_min": "0%",
+    "uk_rate_max": "25%",
+    "common_rates": ["0%", "5%", "8%", "12%", "20%"],
+    "categories_count": 97
+  },
+  "quality_metrics": {
+    "records_with_description": 156765,
+    "records_with_uk_rate": 156789,
+    "records_with_ni_rate": 156123,
+    "completeness_score": 0.998
+  },
+  "download_urls": {
+    "primary": "https://github.com/owner/repo/releases/download/latest-data/tariffs.db",
+    "mirror": [
+      "https://cdn1.example.com/tariffs.db",
+      "https://cdn2.example.com/tariffs.db"
+    ]
+  },
+  "client_instructions": {
+    "check_interval_hours": 24,
+    "auto_download_enabled": true,
+    "backup_before_update": true,
+    "verify_checksum": true
+  }
+}
