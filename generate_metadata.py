@@ -134,7 +134,7 @@ def generate_metadata(db_path: str = 'tariffs.db',
                      repo_info: Dict = None) -> Dict:
     """生成数据库元数据"""
 
-    print("🔍 生成数据库元数据...")
+    print("INFO: 生成数据库元数据...")
 
     # 基本文件信息
     file_info = get_file_info(db_path)
@@ -222,10 +222,10 @@ def generate_metadata(db_path: str = 'tariffs.db',
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(metadata, f, indent=2, ensure_ascii=False)
 
-    print(f"✅ 元数据生成完成: {output_path}")
-    print(f"📊 数据库大小: {file_info['file_size'] / 1024 / 1024:.1f}MB")
-    print(f"📝 记录数量: {db_stats.get('record_count', 0):,}")
-    print(f"🔒 文件哈希: {file_info['file_hash'][:20]}...")
+    print(f"SUCCESS: 元数据生成完成: {output_path}")
+    print(f"INFO: 数据库大小: {file_info['file_size'] / 1024 / 1024:.1f}MB")
+    print(f"INFO: 记录数量: {db_stats.get('record_count', 0):,}")
+    print(f"INFO: 文件哈希: {file_info['file_hash'][:20]}...")
 
     return metadata
 
@@ -242,8 +242,8 @@ def compress_file(input_path: str, output_path: str = None) -> str:
     compressed_size = os.path.getsize(output_path)
     ratio = (1 - compressed_size / original_size) * 100
 
-    print(f"🗜️ 文件压缩完成: {output_path}")
-    print(f"📊 压缩率: {ratio:.1f}% ({original_size / 1024 / 1024:.1f}MB → {compressed_size / 1024 / 1024:.1f}MB)")
+    print(f"INFO: 文件压缩完成: {output_path}")
+    print(f"INFO: 压缩率: {ratio:.1f}% ({original_size / 1024 / 1024:.1f}MB → {compressed_size / 1024 / 1024:.1f}MB)")
 
     return output_path
 
