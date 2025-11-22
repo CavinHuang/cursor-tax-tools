@@ -49,7 +49,7 @@ env:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ github.event.inputs.timeout_minutes || env.DEFAULT_TIMEOUT }}
+    timeout-minutes: 120
 
     steps:
     - name: 检出代码
@@ -91,8 +91,8 @@ jobs:
         USE_OPTIMIZED: ${{ github.event.inputs.use_optimized || 'true' }}
         INPUT_UPDATE_UK: ${{ github.event.inputs.update_uk || 'true' }}
         INPUT_UPDATE_NI: ${{ github.event.inputs.update_ni || 'true' }}
-        INPUT_BATCH_SIZE: ${{ github.event.inputs.batch_size || env.DEFAULT_BATCH_SIZE }}
-        INPUT_DELAY: ${{ github.event.inputs.delay || env.DEFAULT_DELAY }}
+        INPUT_BATCH_SIZE: ${{ github.event.inputs.batch_size || '100' }}
+        INPUT_DELAY: ${{ github.event.inputs.delay || '0.2' }}
       run: |
         echo "🚀 开始数据爬取..."
         START_TIME=$(date +%s)
@@ -207,7 +207,7 @@ jobs:
       id: publish_check
       if: steps.metadata.outputs.metadata_generated == 'true'
       run: |
-        MIN_THRESHOLD=${{ github.event.inputs.min_change_threshold || env.MIN_CHANGE_THRESHOLD }}
+        MIN_THRESHOLD=${{ github.event.inputs.min_change_threshold || '10' }}
         TOTAL_CHANGES=${{ steps.metadata.outputs.total_changes }}
         HAS_EXISTING=${{ steps.check_data.outputs.has_existing_data }}
         QUALITY_SCORE=${{ steps.health_check.outputs.quality_score }}
