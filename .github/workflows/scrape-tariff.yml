@@ -301,14 +301,13 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         tag_name: data-${{ github.run_number }}
-        name: INFO: 关税数据 v${{ github.run_number }} - $(date +'%Y-%m-%d %H:%M UTC')
+        name: "INFO: 关税数据 v${{ github.run_number }} - $(date +'%Y-%m-%d %H:%M UTC')"
         body_path: UPDATE_REPORT.md
         files: |
           tariffs.db
           metadata.json
         draft: false
         prerelease: false
-        latest: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -317,7 +316,7 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         tag_name: latest-data
-        name: INFO: 最新关税数据
+        name: "INFO: Latest Tariff Data"
         body: |
           ## INFO: 最新关税数据
 
@@ -343,7 +342,6 @@ jobs:
           metadata.json
         draft: false
         prerelease: false
-        latest: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
