@@ -185,6 +185,7 @@ jobs:
       if: steps.file_info.outputs.has_database_file == 'true'
       env:
         VERSION: data-${{ github.run_number }}
+        GITHUB_REPOSITORY: CavinHuang/cursor-tax-tools
       run: |
         echo "INFO: 生成元数据..."
 

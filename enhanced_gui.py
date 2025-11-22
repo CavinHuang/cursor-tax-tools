@@ -102,7 +102,7 @@ class EnhancedBatchProcessFrame(ttk.Frame):
 
         # 元数据URL配置
         ttk.Label(self.config_frame, text="元数据URL:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
-        self.metadata_url_var = tk.StringVar(value="https://github.com/LiaoFeng/cursor-tax-tools/releases/download/latest-data/metadata.json")
+        self.metadata_url_var = tk.StringVar(value="https://github.com/CavinHuang/cursor-tax-tools/releases/download/latest-data/metadata.json")
         self.metadata_url_entry = ttk.Entry(self.config_frame, textvariable=self.metadata_url_var, width=60)
         self.metadata_url_entry.grid(row=0, column=1, padx=5, pady=5)
 

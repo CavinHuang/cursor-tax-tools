@@ -885,7 +885,7 @@ class TariffGUI:
         # 元数据URL
         ttk.Label(config_frame, text="元数据URL:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
         self.metadata_url_var = tk.StringVar(
-            value="https://github.com/LiaoFeng/cursor-tax-tools/releases/download/latest-data/metadata.json"
+            value="https://github.com/CavinHuang/cursor-tax-tools/releases/download/latest-data/metadata.json"
         )
         ttk.Entry(config_frame, textvariable=self.metadata_url_var, width=70).grid(row=0, column=1, padx=5, pady=5)
 
