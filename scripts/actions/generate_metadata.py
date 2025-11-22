@@ -193,11 +193,11 @@ def generate_metadata(db_path: str = 'tariffs.db',
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2, ensure_ascii=False)
 
-        print(f"✅ 元数据生成完成: {output_path}")
-        print(f"📊 版本: {metadata['version']}")
-        print(f"📝 记录数: {metadata['record_count']:,}")
-        print(f"💾 大小: {metadata['file_size'] / 1024 / 1024:.1f}MB")
-        print(f"🔒 哈希: {metadata['file_hash'][:32]}...")
+        print(f"SUCCESS: 元数据生成完成: {output_path}")
+        print(f"INFO: 版本: {metadata['version']}")
+        print(f"INFO: 记录数: {metadata['record_count']:,}")
+        print(f"INFO: 大小: {metadata['file_size'] / 1024 / 1024:.1f}MB")
+        print(f"INFO: 哈希: {metadata['file_hash'][:32]}...")
 
         return metadata
 
