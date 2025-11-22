@@ -22,8 +22,8 @@ async def run_optimized_scraper(update_uk: bool, update_ni: bool, batch_size: in
             import backoff
             import psutil
         except ImportError as e:
-            print(f"❌ 优化版缺少依赖: {e}")
-            print("🔧 回退到原版爬虫")
+            print(f"ERROR: 优化版缺少依赖: {e}")
+            print("INFO: 回退到原版爬虫")
             return await run_original_scraper(update_uk, update_ni, batch_size, delay)
 
         from scraper_optimized import OptimizedBatchUpdateManager

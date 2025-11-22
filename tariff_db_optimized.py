@@ -273,5 +273,98 @@ class OptimizedTariffDB:
         except:
             pass
 
+    def get_all_tariffs(self) -> List[Dict]:
+        """获取所有关税记录"""
+        try:
+            has_updated_at = self._has_column('tariffs', 'updated_at')
+
+            if has_updated_at:
+                cur = self.conn.execute("SELECT code, description, rate, url, north_ireland_url, north_ireland_rate, updated_at FROM tariffs")
+            else:
+                cur = self.conn.execute("SELECT code, description, rate, url, north_ireland_url, north_ireland_rate FROM tariffs")
+
+            results = []
+            for row in cur.fetchall():
+                result = {
+                    'code': row[0],
+                    'description': row[1],
+                    'rate': row[2],
+                    'url': row[3],
+                    'north_ireland_url': row[4],
+                    'north_ireland_rate': row[5]
+                }
+                if has_updated_at and len(row) > 6:
+                    result['updated_at'] = row[6]
+                results.append(result)
+
+            return results
+        except Exception as e:
+            logger.error(f"Failed to get all tariffs: {str(e)}")
+            return []
+
+    def get_existing_codes(self) -> set:
+        """获取已存在的关税编码"""
+        try:
+            cur = self.conn.execute("SELECT code FROM tariffs")
+            return {row[0] for row in cur.fetchall()}
+        except Exception as e:
+            logger.error(f"Failed to get existing codes: {str(e)}")
+            return set()
+
+    def get_existing_codes_north_ireland(self) -> set:
+        """获取北爱尔兰关税已存在的编码"""
+        try:
+            cur = self.conn.execute("SELECT code FROM tariffs WHERE north_ireland_rate IS NOT NULL AND north_ireland_rate != ''")
+            return {row[0] for row in cur.fetchall()}
+        except Exception as e:
+            logger.error(f"Failed to get NI codes: {str(e)}")
+            return set()
+
+    def add_tariff(self, code: str, description: str, rate: str, url: str = None, other_rate: str = None, north_ireland_rate: str = None, north_ireland_url: str = None):
+        """添加单个关税记录"""
+        try:
+            with self.conn:
+                self.conn.execute("""
+                    INSERT OR REPLACE INTO tariffs
+                    (code, description, rate, url, north_ireland_url, north_ine_rate)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (code, description, rate, url, north_ireland_url, north_ine_rate))
+
+                logger.debug(f"Added tariff record: {code}")
+        except Exception as e:
+            logger.error(f"Failed to add tariff {code}: {str(e)}")
+
+    def add_tariff_with_history(self, code: str, description: str, rate: str, url: str = None,
+                               other_rate: str = None, north_ireland_rate: str = None, north_ireland_url: str = None):
+        """添加关税记录并记录历史"""
+        try:
+            with self.conn:
+                # 检查是否存在updated_at列
+                has_updated_at = self._has_column('tariffs', 'updated_at')
+
+                if has_updated_at:
+                    self.conn.execute("""
+                        INSERT OR REPLACE INTO tariffs
+                        (code, description, rate, url, north_ireland_url, north_ine_rate, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    """, (code, description, rate, url, north_ireland_url, north_ine_rate))
+                else:
+                    self.conn.execute("""
+                        INSERT OR REPLACE INTO tariffs
+                        (code, description, rate, url, north_ireland_url, north_ine_rate)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (code, description, rate, url, north_ireland_url, north_ine_rate))
+
+                logger.debug(f"Added tariff with history: {code}")
+        except Exception as e:
+            logger.error(f"Failed to add tariff with history {code}: {str(e)}")
+
+    def __del__(self):
+        """析构函数 - 自动关闭连接"""
+        try:
+            self.close()
+        except:
+            pass
+
 # 兼容性别名
 OptimizedBatchUpdateManager = None  # 这个类在scraper_optimized.py中定义

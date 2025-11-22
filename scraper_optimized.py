@@ -197,7 +197,7 @@ class OptimizedTariffScraper:
         self.metrics.current_memory_mb = memory_mb
 
         if memory_mb > self.memory_threshold_mb:
-            logger.warning(f"⚠️ 内存使用过高: {memory_mb:.1f}MB > {self.memory_threshold_mb}MB")
+            logger.warning(f"WARNING: 内存使用过高: {memory_mb:.1f}MB > {self.memory_threshold_mb}MB")
             # 可以在这里实现内存清理策略
             import gc
             gc.collect()
@@ -514,7 +514,7 @@ class OptimizedBatchUpdateManager:
             self.is_running = True
             self.stats['start_time'] = time.time()
 
-            await self._notify_status("🚀 开始优化版批量更新...")
+            await self._notify_status("INFO: 开始优化版批量更新...")
 
             # 获取所有关税数据
             all_tariffs = self.db.get_all_tariffs()
@@ -524,7 +524,7 @@ class OptimizedBatchUpdateManager:
                 all_tariffs = [t for t in all_tariffs if filter_func(t)]
                 self.stats['total'] = len(all_tariffs)
 
-            await self._notify_status(f"📊 准备更新 {self.stats['total']} 条关税记录")
+            await self._notify_status(f"INFO: 准备更新 {self.stats['total']} 条关税记录")
 
             # 分批处理
             await self._process_batches(all_tariffs, batch_size, delay_between_batches, update_uk, update_ni)
@@ -536,7 +536,7 @@ class OptimizedBatchUpdateManager:
 
         except Exception as e:
             logger.error(f"优化批量更新失败: {str(e)}")
-            await self._notify_status(f"❌ 批量更新失败: {str(e)}")
+            await self._notify_status(f"ERROR: 批量更新失败: {str(e)}")
             raise
         finally:
             self.is_running = False
@@ -652,18 +652,18 @@ class OptimizedBatchUpdateManager:
     def pause(self):
         """暂停更新"""
         self.is_paused = True
-        asyncio.create_task(self._notify_status("⏸️ 批量更新已暂停"))
+        asyncio.create_task(self._notify_status("INFO: 批量更新已暂停"))
 
     def resume(self):
         """恢复更新"""
         self.is_paused = False
-        asyncio.create_task(self._notify_status("▶️ 批量更新已恢复"))
+        asyncio.create_task(self._notify_status("INFO: 批量更新已恢复"))
 
     def cancel(self):
         """取消更新"""
         self.is_cancelled = True
         self.is_paused = False
-        asyncio.create_task(self._notify_status("⏹️ 正在取消批量更新..."))
+        asyncio.create_task(self._notify_status("INFO: 正在取消批量更新..."))
 
     async def _notify_status(self, message: str):
         """通知状态"""
