@@ -5,6 +5,7 @@ import logging
 from tariff_api import TariffAPI
 from tariff_db import TariffDB
 from scraper import BatchUpdateManager
+from smart_update_client import SmartUpdateChecker
 import queue
 import threading
 import asyncio
@@ -159,6 +160,11 @@ class TariffGUI:
         self.update_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.update_frame, text="批量更新")
         self.setup_batch_update()
+
+        # 远程数据更新标签页
+        self.remote_update_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.remote_update_frame, text="远程数据更新")
+        self.setup_remote_update()
 
     def setup_single_search(self):
         """设置单个查询界面"""
@@ -869,6 +875,281 @@ class TariffGUI:
         except Exception as e:
             logger.error(f"格式化原始数据失败: {str(e)}")
             return f"格式化数据失败: {str(e)}"
+
+    def setup_remote_update(self):
+        """设置远程数据更新界面"""
+        # 配置区域
+        config_frame = ttk.LabelFrame(self.remote_update_frame, text="更新配置")
+        config_frame.pack(fill='x', padx=10, pady=10)
+
+        # 元数据URL
+        ttk.Label(config_frame, text="元数据URL:").grid(row=0, column=0, sticky='w', padx=5, pady=5)
+        self.metadata_url_var = tk.StringVar(
+            value="https://github.com/LiaoFeng/cursor-tax-tools/releases/download/latest-data/metadata.json"
+        )
+        ttk.Entry(config_frame, textvariable=self.metadata_url_var, width=70).grid(row=0, column=1, padx=5, pady=5)
+
+        # 数据库路径
+        ttk.Label(config_frame, text="数据库路径:").grid(row=1, column=0, sticky='w', padx=5, pady=5)
+        self.db_path_var = tk.StringVar(value="tariffs.db")
+        db_entry = ttk.Entry(config_frame, textvariable=self.db_path_var, width=70)
+        db_entry.grid(row=1, column=1, padx=5, pady=5)
+
+        # 浏览按钮
+        ttk.Button(config_frame, text="浏览", command=self.browse_remote_database).grid(row=1, column=2, padx=5, pady=5)
+
+        # 状态显示区域
+        status_frame = ttk.LabelFrame(self.remote_update_frame, text="当前状态")
+        status_frame.pack(fill='x', padx=10, pady=10)
+
+        # 本地信息
+        local_frame = ttk.Frame(status_frame)
+        local_frame.pack(fill='x', padx=5, pady=5)
+        ttk.Label(local_frame, text="本地版本:").pack(side='left')
+        self.local_version_label = ttk.Label(local_frame, text="未知", foreground="blue")
+        self.local_version_label.pack(side='left', padx=(10, 20))
+
+        ttk.Label(local_frame, text="本地记录数:").pack(side='left')
+        self.local_records_label = ttk.Label(local_frame, text="0", foreground="blue")
+        self.local_records_label.pack(side='left', padx=10)
+
+        # 远程信息
+        remote_frame = ttk.Frame(status_frame)
+        remote_frame.pack(fill='x', padx=5, pady=5)
+        ttk.Label(remote_frame, text="远程版本:").pack(side='left')
+        self.remote_version_label = ttk.Label(remote_frame, text="未检查", foreground="green")
+        self.remote_version_label.pack(side='left', padx=(10, 20))
+
+        ttk.Label(remote_frame, text="远程记录数:").pack(side='left')
+        self.remote_records_label = ttk.Label(remote_frame, text="未检查", foreground="green")
+        self.remote_records_label.pack(side='left', padx=10)
+
+        # 更新状态
+        update_frame = ttk.Frame(status_frame)
+        update_frame.pack(fill='x', padx=5, pady=5)
+        ttk.Label(update_frame, text="更新状态:").pack(side='left')
+        self.update_status_label = ttk.Label(update_frame, text="未检查", foreground="gray")
+        self.update_status_label.pack(side='left', padx=10)
+
+        # 操作按钮区域
+        action_frame = ttk.LabelFrame(self.remote_update_frame, text="操作")
+        action_frame.pack(fill='x', padx=10, pady=10)
+
+        button_frame = ttk.Frame(action_frame)
+        button_frame.pack(pady=10)
+
+        # 检查更新按钮
+        self.check_remote_update_btn = ttk.Button(
+            button_frame,
+            text="🔍 检查更新",
+            command=self.check_remote_update,
+            width=15
+        )
+        self.check_remote_update_btn.pack(side='left', padx=5)
+
+        # 强制更新按钮
+        self.force_remote_update_btn = ttk.Button(
+            button_frame,
+            text="🔄 强制更新",
+            command=self.force_remote_update,
+            width=15
+        )
+        self.force_remote_update_btn.pack(side='left', padx=5)
+
+        # 刷新状态按钮
+        self.refresh_status_btn = ttk.Button(
+            button_frame,
+            text="♻️ 刷新状态",
+            command=self.refresh_remote_status,
+            width=15
+        )
+        self.refresh_status_btn.pack(side='left', padx=5)
+
+        # 日志显示区域
+        log_frame = ttk.LabelFrame(self.remote_update_frame, text="更新日志")
+        log_frame.pack(fill='both', expand=True, padx=10, pady=10)
+
+        # 创建日志文本框
+        self.remote_log_text = tk.Text(log_frame, height=15, width=100)
+        self.remote_log_scrollbar = ttk.Scrollbar(log_frame, command=self.remote_log_text.yview)
+        self.remote_log_text.config(yscrollcommand=self.remote_log_scrollbar.set)
+
+        self.remote_log_text.pack(side='left', fill='both', expand=True, padx=5, pady=5)
+        self.remote_log_scrollbar.pack(side='right', fill='y', pady=5)
+
+        # 进度条
+        self.remote_progress_var = tk.DoubleVar()
+        self.remote_progress_bar = ttk.Progressbar(
+            self.remote_update_frame,
+            variable=self.remote_progress_var,
+            mode='indeterminate',
+            length=400
+        )
+        self.remote_progress_bar.pack(fill='x', padx=10, pady=5)
+
+        # 初始化远程更新检查器
+        self.smart_update_checker = None
+
+    def browse_remote_database(self):
+        """浏览数据库文件"""
+        filename = filedialog.askopenfilename(
+            title="选择数据库文件",
+            filetypes=[("SQLite数据库", "*.db"), ("所有文件", "*.*")]
+        )
+        if filename:
+            self.db_path_var.set(filename)
+
+    def refresh_remote_status(self):
+        """刷新远程状态"""
+        def refresh_task():
+            try:
+                db_path = self.db_path_var.get()
+                if not os.path.exists(db_path):
+                    self.local_version_label.config(text="数据库文件不存在")
+                    self.local_records_label.config(text="0")
+                    self.update_status_label.config(text="需要创建", foreground="orange")
+                    self.add_remote_log("❌ 数据库文件不存在")
+                    return
+
+                # 初始化更新检查器
+                metadata_url = self.metadata_url_var.get()
+                self.smart_update_checker = SmartUpdateChecker(metadata_url, db_path)
+
+                # 获取本地信息
+                local_metadata = self.smart_update_checker.load_local_metadata()
+                local_db_info = self.smart_update_checker.get_local_db_info()
+
+                if local_metadata:
+                    self.local_version_label.config(text=local_metadata.get('version', '未知'))
+                else:
+                    self.local_version_label.config(text="无元数据")
+
+                self.local_records_label.config(text=str(local_db_info.get('record_count', 0)))
+                self.update_status_label.config(text="已检查", foreground="green")
+
+                self.add_remote_log("✅ 本地状态已刷新")
+
+            except Exception as e:
+                self.add_remote_log(f"❌ 刷新状态失败: {str(e)}")
+                self.update_status_label.config(text="检查失败", foreground="red")
+
+        threading.Thread(target=refresh_task, daemon=True).start()
+
+    def check_remote_update(self):
+        """检查远程更新"""
+        def check_task():
+            try:
+                self.set_remote_ui_state(False)
+                self.remote_progress_bar.start()
+                self.add_remote_log("🔍 开始检查远程更新...")
+
+                # 初始化更新检查器
+                db_path = self.db_path_var.get()
+                metadata_url = self.metadata_url_var.get()
+                self.smart_update_checker = SmartUpdateChecker(metadata_url, db_path)
+
+                # 下载远程元数据
+                remote_metadata = self.smart_update_checker.download_metadata()
+                if not remote_metadata:
+                    self.add_remote_log("❌ 无法下载远程元数据")
+                    self.remote_version_label.config(text="获取失败", foreground="red")
+                    return
+
+                # 更新远程版本信息
+                remote_version = remote_metadata.get('version', '未知')
+                remote_records = remote_metadata.get('record_count', 0)
+                self.remote_version_label.config(text=remote_version, foreground="green")
+                self.remote_records_label.config(text=str(remote_records), foreground="green")
+
+                # 获取本地信息
+                local_metadata = self.smart_update_checker.load_local_metadata()
+                local_db_info = self.smart_update_checker.get_local_db_info()
+
+                # 更新本地版本信息
+                if local_metadata:
+                    local_version = local_metadata.get('version', '未知')
+                    self.local_version_label.config(text=local_version)
+                else:
+                    self.local_version_label.config(text="无元数据")
+
+                self.local_records_label.config(text=str(local_db_info.get('record_count', 0)))
+
+                # 检查是否需要更新
+                update_needed, reason, details = self.smart_update_checker.check_update_needed(
+                    remote_metadata, local_db_info, local_metadata
+                )
+
+                if update_needed:
+                    self.update_status_label.config(text=f"需要更新: {reason}", foreground="orange")
+                    self.add_remote_log(f"🔄 需要更新: {reason}")
+
+                    priority = details.get('priority', 'medium')
+                    if priority == 'high':
+                        self.add_remote_log("🔥 高优先级更新建议")
+                    elif priority == 'medium':
+                        self.add_remote_log("⚠️ 中优先级更新建议")
+                    else:
+                        self.add_remote_log("💡 低优先级更新建议")
+                else:
+                    self.update_status_label.config(text="已是最新", foreground="green")
+                    self.add_remote_log("✅ 数据库已是最新版本")
+
+            except Exception as e:
+                self.add_remote_log(f"❌ 检查更新失败: {str(e)}")
+                self.update_status_label.config(text="检查失败", foreground="red")
+            finally:
+                self.remote_progress_bar.stop()
+                self.set_remote_ui_state(True)
+
+        threading.Thread(target=check_task, daemon=True).start()
+
+    def force_remote_update(self):
+        """强制更新"""
+        def update_task():
+            try:
+                self.set_remote_ui_state(False)
+                self.remote_progress_bar.start()
+                self.add_remote_log("🔄 开始强制更新...")
+
+                # 初始化更新检查器
+                db_path = self.db_path_var.get()
+                metadata_url = self.metadata_url_var.get()
+                self.smart_update_checker = SmartUpdateChecker(metadata_url, db_path)
+
+                # 执行强制更新
+                result = self.smart_update_checker.check_and_update(force_update=True)
+
+                if result['status'] == 'success':
+                    self.add_remote_log(f"✅ 更新成功: {result['message']}")
+                    self.update_status_label.config(text="更新成功", foreground="green")
+
+                    # 刷新状态信息
+                    self.refresh_remote_status()
+                else:
+                    self.add_remote_log(f"❌ 更新失败: {result['message']}")
+                    self.update_status_label.config(text="更新失败", foreground="red")
+
+            except Exception as e:
+                self.add_remote_log(f"❌ 强制更新异常: {str(e)}")
+                self.update_status_label.config(text="更新异常", foreground="red")
+            finally:
+                self.remote_progress_bar.stop()
+                self.set_remote_ui_state(True)
+
+        threading.Thread(target=update_task, daemon=True).start()
+
+    def set_remote_ui_state(self, enabled):
+        """设置远程更新UI状态"""
+        state = 'normal' if enabled else 'disabled'
+        self.check_remote_update_btn.config(state=state)
+        self.force_remote_update_btn.config(state=state)
+        self.refresh_status_btn.config(state=state)
+
+    def add_remote_log(self, message):
+        """添加远程更新日志"""
+        timestamp = self._get_current_time()
+        self.remote_log_text.insert('end', f"[{timestamp}] {message}\n")
+        self.remote_log_text.see('end')
 
     def _get_current_time(self) -> str:
         """获取当前时间字符串"""

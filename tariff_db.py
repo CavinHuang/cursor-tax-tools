@@ -33,9 +33,20 @@ class TariffDB:
                     other_rate TEXT
                 )
                 """)
-                # 为现有表添加other_rate字段
-                self.conn.execute("ALTER TABLE tariffs ADD COLUMN other_rate TEXT")
+
+                # 检查是否需要添加other_rate字段（为了向后兼容旧版本数据库）
+                try:
+                    self.conn.execute("ALTER TABLE tariffs ADD COLUMN other_rate TEXT")
+                    logger.info("✅ 成功添加other_rate列")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name" in str(e).lower():
+                        logger.debug("ℹ️ other_rate列已存在，跳过")
+                    else:
+                        raise e
+
+                # 创建索引
                 self.conn.execute("CREATE INDEX IF NOT EXISTS idx_code ON tariffs(code)")
+
                 # 添加错误记录表
                 self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS scrape_errors (
@@ -44,8 +55,8 @@ class TariffDB:
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
                 """)
-                # 添加索引
-                self.conn.execute("CREATE INDEX IF NOT EXISTS idx_code ON tariffs(code)")
+
+                logger.info("✅ 数据库表结构创建完成")
         except Exception as e:
             logger.error(f"创建表失败: {str(e)}")
             raise
