@@ -36,11 +36,21 @@ class OptimizedTariffDB:
 
         return self._local.conn
 
+    def _has_column(self, table_name: str, column_name: str) -> bool:
+        """检查表是否包含指定列"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(f"PRAGMA table_info({table_name})")
+            columns = cursor.fetchall()
+            return any(col[1] == column_name for col in columns)
+        except Exception:
+            return False
+
     def _create_tables_with_indexes(self):
         """创建数据表和性能优化索引"""
         try:
             with self.conn:
-                # 主表
+                # 主表 - 兼容现有数据库
                 self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS tariffs (
                     code TEXT PRIMARY KEY,
@@ -50,10 +60,19 @@ class OptimizedTariffDB:
                     north_ireland_rate TEXT,
                     north_ireland_url TEXT,
                     other_rate TEXT,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     version INTEGER DEFAULT 1
                 )
                 """)
+
+                # 检查并添加 updated_at 列
+                try:
+                    self.conn.execute("ALTER TABLE tariffs ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP")
+                    logger.info("Added updated_at column to tariffs table")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name" in str(e).lower():
+                        logger.debug("updated_at column already exists, skipping")
+                    else:
+                        logger.error(f"Error adding updated_at column: {e}")
 
                 # 错误记录表（优化版）
                 self.conn.execute("""
@@ -61,319 +80,198 @@ class OptimizedTariffDB:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     code TEXT NOT NULL,
                     error_message TEXT,
-                    error_type TEXT DEFAULT 'network',
-                    retry_count INTEGER DEFAULT 0,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(code, timestamp)
+                    retry_count INTEGER DEFAULT 0
                 )
                 """)
 
-                # 更新历史表（新增）
+                # 更新历史表
                 self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS update_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    code TEXT NOT NULL,
-                    field_name TEXT NOT NULL,
-                    old_value TEXT,
-                    new_value TEXT,
-                    update_type TEXT NOT NULL,  -- 'uk', 'ni', 'both'
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                    update_type TEXT,
+                    total_records INTEGER,
+                    successful_records INTEGER,
+                    failed_records INTEGER,
+                    start_time DATETIME,
+                    end_time DATETIME,
+                    metadata TEXT
                 )
                 """)
 
                 # 性能索引
-                indexes = [
-                    "CREATE INDEX IF NOT EXISTS idx_tariffs_code ON tariffs(code)",
-                    "CREATE INDEX IF NOT EXISTS idx_tariffs_description ON tariffs(description)",
-                    "CREATE INDEX IF NOT EXISTS idx_tariffs_rate ON tariffs(rate)",
-                    "CREATE INDEX IF NOT EXISTS idx_tariffs_ni_rate ON tariffs(north_ireland_rate)",
-                    "CREATE INDEX IF NOT EXISTS idx_tariffs_updated_at ON tariffs(updated_at)",
-                    "CREATE INDEX IF NOT EXISTS idx_errors_code ON scrape_errors(code)",
-                    "CREATE INDEX IF NOT EXISTS idx_errors_timestamp ON scrape_errors(timestamp)",
-                    "CREATE INDEX IF NOT EXISTS idx_errors_type ON scrape_errors(error_type)",
-                    "CREATE INDEX IF NOT EXISTS idx_history_code ON update_history(code)",
-                    "CREATE INDEX IF NOT EXISTS idx_history_timestamp ON update_history(timestamp)",
-                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_errors_unique ON scrape_errors(code, timestamp)"
-                ]
+                self._create_performance_indexes()
 
-                for idx_sql in indexes:
-                    self.conn.execute(idx_sql)
-
-                logger.info("✅ 数据库表和索引创建完成")
+                logger.info("Optimized database tables and indexes created successfully")
 
         except Exception as e:
-            logger.error(f"❌ 创建表和索引失败: {str(e)}")
+            logger.error(f"Failed to create tables and indexes: {str(e)}")
             raise
 
-    def add_tariff_with_history(self, code: str, description: str, rate: str,
-                               url: str = None, other_rate: str = None,
-                               north_ireland_rate: str = None, north_ireland_url: str = None,
-                               update_type: str = 'uk'):
-        """添加关税记录并记录历史变更"""
-        try:
-            # 获取旧数据用于历史记录
-            old_data = self.get_tariff(code)
+    def _create_performance_indexes(self):
+        """创建性能优化索引"""
+        indexes = [
+            # 基础索引
+            ("idx_tariffs_code", "CREATE INDEX IF NOT EXISTS idx_tariffs_code ON tariffs(code)"),
 
-            with self.conn:
-                # 更新主表
-                self.conn.execute("""
-                    INSERT OR REPLACE INTO tariffs
-                    (code, description, rate, url, other_rate, north_ireland_rate, north_ireland_url, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (code, description, rate, url, other_rate, north_ireland_rate, north_ireland_url, datetime.now()))
+            # 查询优化索引
+            ("idx_tariffs_rate", "CREATE INDEX IF NOT EXISTS idx_tariffs_rate ON tariffs(rate)"),
+            ("idx_tariffs_ni_rate", "CREATE INDEX IF NOT EXISTS idx_tariffs_ni_rate ON tariffs(north_ireland_rate)"),
 
-                # 记录变更历史
-                if old_data:
-                    changes = []
-                    if old_data['rate'] != rate:
-                        changes.append(('rate', old_data['rate'], rate))
-                    if old_data['description'] != description:
-                        changes.append(('description', old_data['description'], description))
-                    if old_data.get('north_ireland_rate') != north_ireland_rate:
-                        changes.append(('north_ireland_rate', old_data.get('north_ireland_rate'), north_ireland_rate))
+            # 错误处理索引
+            ("idx_errors_code", "CREATE INDEX IF NOT EXISTS idx_errors_code ON scrape_errors(code)"),
+            ("idx_errors_timestamp", "CREATE INDEX IF NOT EXISTS idx_errors_timestamp ON scrape_errors(timestamp)"),
 
-                    for field, old_val, new_val in changes:
-                        self.conn.execute("""
-                            INSERT INTO update_history (code, field_name, old_value, new_value, update_type)
-                            VALUES (?, ?, ?, ?, ?)
-                        """, (code, field, old_val, new_val, update_type))
+            # 历史记录索引
+            ("idx_history_type", "CREATE INDEX IF NOT EXISTS idx_history_type ON update_history(update_type)"),
+            ("idx_history_start_time", "CREATE INDEX IF NOT EXISTS idx_history_start_time ON update_history(start_time)"),
+        ]
 
-        except Exception as e:
-            logger.error(f"❌ 添加记录失败 {code}: {str(e)}")
-            raise
+        # 只有当 updated_at 列存在时才创建相关索引
+        if self._has_column('tariffs', 'updated_at'):
+            indexes.extend([
+                ("idx_tariffs_updated_at", "CREATE INDEX IF NOT EXISTS idx_tariffs_updated_at ON tariffs(updated_at)"),
+                ("idx_tariffs_updated_desc", "CREATE INDEX IF NOT EXISTS idx_tariffs_updated_desc ON tariffs(updated_at DESC)"),
+            ])
 
-    def add_tariffs_batch_optimized(self, tariffs: List[Dict], batch_size: int = 1000):
-        """高性能批量添加关税记录"""
-        try:
-            total_added = 0
-
-            for i in range(0, len(tariffs), batch_size):
-                batch = tariffs[i:i + batch_size]
-
-                with self.conn:
-                    # 使用事务提高性能
-                    self.conn.executemany("""
-                        INSERT OR REPLACE INTO tariffs
-                        (code, description, rate, url, other_rate, north_ireland_rate, north_ireland_url, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, [
-                        (
-                            t['code'], t['description'], t['rate'],
-                            t.get('url'), t.get('other_rate'),
-                            t.get('north_ireland_rate'), t.get('north_ireland_url'),
-                            datetime.now()
-                        ) for t in batch
-                    ])
-
-                total_added += len(batch)
-                logger.info(f"✅ 批量添加完成 {total_added}/{len(tariffs)} 条记录")
-
-        except Exception as e:
-            logger.error(f"❌ 批量添加失败: {str(e)}")
-            raise
+        for index_name, sql in indexes:
+            try:
+                self.conn.execute(sql)
+                logger.debug(f"Created index: {index_name}")
+            except Exception as e:
+                logger.warning(f"Failed to create index {index_name}: {e}")
 
     def get_tariffs_pagination(self, offset: int = 0, limit: int = 1000,
                               filter_by_rate: str = None) -> List[Dict]:
         """分页获取关税记录（支持筛选）"""
         try:
-            sql = """
-                SELECT code, description, rate, url, north_ireland_url, north_ireland_rate, updated_at
-                FROM tariffs
-            """
+            # 动态构建SQL，根据列是否存在选择字段
+            has_updated_at = self._has_column('tariffs', 'updated_at')
+
+            if has_updated_at:
+                sql = """
+                    SELECT code, description, rate, url, north_ireland_url, north_ireland_rate, updated_at
+                    FROM tariffs
+                """
+                order_by = " ORDER BY updated_at DESC"
+            else:
+                sql = """
+                    SELECT code, description, rate, url, north_ireland_url, north_ireland_rate
+                    FROM tariffs
+                """
+                order_by = " ORDER BY code"
+
             params = []
 
             if filter_by_rate:
                 sql += " WHERE rate = ?"
                 params.append(filter_by_rate)
 
-            sql += " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+            sql += f"{order_by} LIMIT ? OFFSET ?"
             params.extend([limit, offset])
 
-            cur = self.conn.execute(sql, params)
-            return [
-                {
+            cursor = self.conn.execute(sql, params)
+            rows = cursor.fetchall()
+
+            results = []
+            for row in rows:
+                result = {
                     'code': row[0],
                     'description': row[1],
                     'rate': row[2],
                     'url': row[3],
                     'north_ireland_url': row[4],
-                    'north_ireland_rate': row[5],
-                    'updated_at': row[6]
+                    'north_ireland_rate': row[5]
                 }
-                for row in cur.fetchall()
-            ]
+                if has_updated_at and len(row) > 6:
+                    result['updated_at'] = row[6]
+                results.append(result)
+
+            return results
+
         except Exception as e:
-            logger.error(f"❌ 分页查询失败: {str(e)}")
-            raise
+            logger.error(f"分页查询失败: {str(e)}")
+            return []
 
     def get_statistics(self) -> Dict:
         """获取数据库统计信息"""
         try:
             stats = {}
 
-            # 基本统计
-            stats['total_records'] = self.conn.execute("SELECT COUNT(*) FROM tariffs").fetchone()[0]
-            stats['unique_rates'] = self.conn.execute("SELECT COUNT(DISTINCT rate) FROM tariffs").fetchone()[0]
-            stats['records_with_ni_rate'] = self.conn.execute(
+            # 基础统计
+            cursor = self.conn.cursor()
+            stats['total_records'] = cursor.execute("SELECT COUNT(*) FROM tariffs").fetchone()[0]
+            stats['records_with_description'] = cursor.execute(
+                "SELECT COUNT(*) FROM tariffs WHERE description IS NOT NULL AND description != ''"
+            ).fetchone()[0]
+            stats['records_with_uk_rate'] = cursor.execute(
+                "SELECT COUNT(*) FROM tariffs WHERE rate IS NOT NULL AND rate != ''"
+            ).fetchone()[0]
+            stats['records_with_ni_rate'] = cursor.execute(
                 "SELECT COUNT(*) FROM tariffs WHERE north_ireland_rate IS NOT NULL AND north_ireland_rate != ''"
             ).fetchone()[0]
 
-            # 最近更新
-            stats['last_update'] = self.conn.execute(
-                "SELECT MAX(updated_at) FROM tariffs"
-            ).fetchone()[0]
-
             # 错误统计
-            error_stats = self.conn.execute("""
-                SELECT error_type, COUNT(*) as count
-                FROM scrape_errors
-                WHERE timestamp > datetime('now', '-7 days')
-                GROUP BY error_type
-            """).fetchall()
+            stats['active_errors'] = cursor.execute("SELECT COUNT(*) FROM scrape_errors").fetchone()[0]
 
-            stats['recent_errors'] = {row[0]: row[1] for row in error_stats}
+            # 如果有 updated_at 列，添加时间相关统计
+            if self._has_column('tariffs', 'updated_at'):
+                stats['last_update'] = cursor.execute(
+                    "SELECT MAX(updated_at) FROM tariffs"
+                ).fetchone()[0] or None
 
-            # 更新频率统计
-            update_stats = self.conn.execute("""
-                SELECT DATE(updated_at) as update_date, COUNT(*) as count
-                FROM tariffs
-                WHERE updated_at > datetime('now', '-30 days')
-                GROUP BY DATE(updated_at)
-                ORDER BY update_date DESC
-                LIMIT 7
-            """).fetchall()
+                # 更新频率统计
+                update_stats = cursor.execute("""
+                    SELECT DATE(updated_at) as update_date, COUNT(*) as count
+                    FROM tariffs
+                    WHERE updated_at > datetime('now', '-30 days')
+                    GROUP BY DATE(updated_at)
+                    ORDER BY update_date DESC
+                """).fetchall()
+                stats['recent_updates'] = [
+                    {'date': row[0], 'count': row[1]} for row in update_stats
+                ]
+            else:
+                stats['last_update'] = None
+                stats['recent_updates'] = []
 
-            stats['recent_updates'] = {row[0]: row[1] for row in update_stats}
-
+            logger.debug(f"Database statistics: {stats}")
             return stats
 
         except Exception as e:
-            logger.error(f"❌ 获取统计信息失败: {str(e)}")
+            logger.error(f"获取统计信息失败: {str(e)}")
             return {}
 
-    def clean_old_errors(self, days: int = 30):
-        """清理旧的错误记录"""
-        try:
-            with self.conn:
-                result = self.conn.execute(
-                    "DELETE FROM scrape_errors WHERE timestamp < datetime('now', '-{} days')".format(days)
-                )
-                deleted_count = result.rowcount
-                logger.info(f"✅ 清理了 {deleted_count} 条旧错误记录")
-                return deleted_count
-        except Exception as e:
-            logger.error(f"❌ 清理错误记录失败: {str(e)}")
-            return 0
-
     def optimize_database(self):
-        """优化数据库（VACUUM 和 ANALYZE）"""
+        """优化数据库性能"""
         try:
             with self.conn:
-                self.conn.execute("VACUUM")  # 重新组织数据库文件
-                self.conn.execute("ANALYZE")  # 更新查询优化器统计信息
-            logger.info("✅ 数据库优化完成")
-        except Exception as e:
-            logger.error(f"❌ 数据库优化失败: {str(e)}")
+                # 分析表统计信息
+                self.conn.execute("ANALYZE")
 
-    def export_to_json(self, output_file: str, include_history: bool = False):
-        """导出数据为JSON格式"""
+                # 清理碎片
+                self.conn.execute("VACUUM")
+
+                # 重建索引
+                self._create_performance_indexes()
+
+            logger.info("Database optimization completed")
+
+        except Exception as e:
+            logger.error(f"数据库优化失败: {str(e)}")
+
+    def close(self):
+        """关闭数据库连接"""
+        if hasattr(self._local, "conn"):
+            self._local.conn.close()
+            del self._local.conn
+
+    def __del__(self):
+        """析构函数 - 自动关闭连接"""
         try:
-            data = {
-                'export_time': datetime.now().isoformat(),
-                'statistics': self.get_statistics(),
-                'tariffs': self.get_all_tariffs()
-            }
+            self.close()
+        except:
+            pass
 
-            if include_history:
-                # 导出更新历史
-                cur = self.conn.execute("""
-                    SELECT code, field_name, old_value, new_value, update_type, timestamp
-                    FROM update_history
-                    ORDER BY timestamp DESC
-                    LIMIT 10000
-                """)
-                data['update_history'] = [
-                    {
-                        'code': row[0],
-                        'field': row[1],
-                        'old_value': row[2],
-                        'new_value': row[3],
-                        'type': row[4],
-                        'timestamp': row[5]
-                    }
-                    for row in cur.fetchall()
-                ]
-
-            with open(output_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-
-            logger.info(f"✅ 数据导出完成: {output_file}")
-
-        except Exception as e:
-            logger.error(f"❌ 数据导出失败: {str(e)}")
-            raise
-
-    # 兼容性方法（保持与原API一致）
-    def add_tariff(self, code: str, description: str, rate: str, url: str = None, other_rate: str = None):
-        """兼容性方法 - 添加关税记录"""
-        self.add_tariff_with_history(code, description, rate, url, other_rate)
-
-    def get_tariff(self, code: str) -> Optional[Dict]:
-        """兼容性方法 - 获取单个关税记录"""
-        try:
-            cur = self.conn.execute("""
-                SELECT code, description, rate, url, north_ireland_rate, north_ireland_url, other_rate, updated_at
-                FROM tariffs WHERE code = ?
-            """, (code,))
-            row = cur.fetchone()
-            if row:
-                return {
-                    'code': row[0],
-                    'description': row[1],
-                    'rate': row[2],
-                    'url': row[3],
-                    'north_ireland_rate': row[4],
-                    'north_ireland_url': row[5],
-                    'other_rate': row[6],
-                    'updated_at': row[7]
-                }
-            return None
-        except Exception as e:
-            logger.error(f"❌ 查询记录失败: {str(e)}")
-            raise
-
-    def get_all_tariffs(self) -> List[Dict]:
-        """兼容性方法 - 获取所有关税记录"""
-        try:
-            cur = self.conn.execute("""
-                SELECT code, description, rate, url, north_ireland_url, north_ireland_rate, other_rate
-                FROM tariffs
-            """)
-            return [
-                {
-                    'code': row[0],
-                    'description': row[1],
-                    'rate': row[2],
-                    'url': row[3],
-                    'north_ireland_url': row[4],
-                    'north_ireland_rate': row[5],
-                    'other_rate': row[6]
-                }
-                for row in cur.fetchall()
-            ]
-        except Exception as e:
-            logger.error(f"❌ 获取所有记录失败: {str(e)}")
-            raise
-
-    def add_tariffs_batch(self, tariffs: List[Dict]):
-        """兼容性方法 - 批量添加关税记录"""
-        self.add_tariffs_batch_optimized(tariffs)
-
-    def get_record_count(self) -> int:
-        """兼容性方法 - 获取记录数"""
-        try:
-            cur = self.conn.execute("SELECT COUNT(*) FROM tariffs")
-            return cur.fetchone()[0]
-        except Exception as e:
-            logger.error(f"❌ 获取记录数失败: {str(e)}")
-            raise
+# 兼容性别名
+OptimizedBatchUpdateManager = None  # 这个类在scraper_optimized.py中定义
