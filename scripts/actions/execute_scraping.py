@@ -10,14 +10,26 @@ import json
 import sys
 from datetime import datetime
 
+# 添加项目根目录到Python路径
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
 
 async def run_optimized_scraper(update_uk: bool, update_ni: bool, batch_size: int, delay: float):
     """运行优化版爬虫"""
     try:
+        # 检查必要的依赖
+        try:
+            import backoff
+            import psutil
+        except ImportError as e:
+            print(f"❌ 优化版缺少依赖: {e}")
+            print("🔧 回退到原版爬虫")
+            return await run_original_scraper(update_uk, update_ni, batch_size, delay)
+
         from scraper_optimized import OptimizedBatchUpdateManager
         from tariff_db_optimized import OptimizedTariffDB
 
-        print("📈 使用优化版爬虫")
+        print("Using optimized scraper")
 
         # 初始化数据库
         db = OptimizedTariffDB()
@@ -26,7 +38,7 @@ async def run_optimized_scraper(update_uk: bool, update_ni: bool, batch_size: in
         # 创建更新管理器
         manager = OptimizedBatchUpdateManager()
 
-        print(f"🔧 配置参数: UK={update_uk}, NI={update_ni}, Batch={batch_size}, Delay={delay}s")
+        print(f"Config parameters: UK={update_uk}, NI={update_ni}, Batch={batch_size}, Delay={delay}s")
 
         # 执行更新
         results = await manager.update_all_tariffs_optimized(
@@ -40,15 +52,15 @@ async def run_optimized_scraper(update_uk: bool, update_ni: bool, batch_size: in
         with open('update_results.json', 'w', encoding='utf-8') as f:
             json.dump(results, f, indent=2, default=str, ensure_ascii=False)
 
-        print(f'✅ 优化版更新完成: 成功={results.get("successful", 0)}, 失败={results.get("failed", 0)}')
+        print(f'Optimized scraper completed: successful={results.get("successful", 0)}, failed={results.get("failed", 0)}')
         return results
 
     except ImportError as e:
-        print(f"❌ 优化版爬虫导入失败: {e}")
-        print("🔧 回退到原版爬虫")
+        print(f"Optimized scraper import failed: {e}")
+        print("Falling back to original scraper")
         return await run_original_scraper(update_uk, update_ni, batch_size, delay)
     except Exception as e:
-        print(f"❌ 优化版爬虫执行失败: {e}")
+        print(f"Optimized scraper execution failed: {e}")
         return {"successful": 0, "failed": 0, "error": str(e)}
 
 
@@ -57,12 +69,12 @@ async def run_original_scraper(update_uk: bool, update_ni: bool, batch_size: int
     try:
         from scraper import BatchUpdateManager
 
-        print("🔧 使用原版爬虫")
+        print("Using original scraper")
 
         # 创建更新管理器
         manager = BatchUpdateManager()
 
-        print(f"🔧 配置参数: UK={update_uk}, NI={update_ni}, Batch={batch_size}, Delay={delay}s")
+        print(f"Config parameters: UK={update_uk}, NI={update_ni}, Batch={batch_size}, Delay={delay}s")
 
         # 执行更新
         results = await manager.update_all_tariffs(
@@ -76,11 +88,11 @@ async def run_original_scraper(update_uk: bool, update_ni: bool, batch_size: int
         with open('update_results.json', 'w', encoding='utf-8') as f:
             json.dump(results, f, indent=2, default=str, ensure_ascii=False)
 
-        print(f'✅ 原版更新完成: 成功={results.get("successful", 0)}, 失败={results.get("failed", 0)}')
+        print(f'Original scraper completed: successful={results.get("successful", 0)}, failed={results.get("failed", 0)}')
         return results
 
     except Exception as e:
-        print(f"❌ 原版爬虫执行失败: {e}")
+        print(f"Original scraper execution failed: {e}")
         return {"successful": 0, "failed": 0, "error": str(e)}
 
 
@@ -94,7 +106,7 @@ async def main():
         delay = float(os.getenv('INPUT_DELAY', '0.2'))
         use_optimized = os.getenv('USE_OPTIMIZED', 'true').lower() == 'true'
 
-        print(f"🚀 开始数据爬取 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"Starting data scraping - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
         # 选择爬虫版本
         if use_optimized:
@@ -104,17 +116,17 @@ async def main():
 
         # 输出结果摘要
         if results.get("error"):
-            print(f"❌ 爬取失败: {results['error']}")
+            print(f"ERROR: Scraping failed - {results['error']}")
             sys.exit(1)
         else:
-            print(f"🎉 爬取成功完成!")
-            print(f"   📊 成功: {results.get('successful', 0)}")
-            print(f"   ❌ 失败: {results.get('failed', 0)}")
-            print(f"   🇬🇧 英国更新: {results.get('uk_updated', 0)}")
-            print(f"   🇮🇪 北爱更新: {results.get('ni_updated', 0)}")
+            print(f"SUCCESS: Scraping completed!")
+            print(f"   Successful: {results.get('successful', 0)}")
+            print(f"   Failed: {results.get('failed', 0)}")
+            print(f"   UK updated: {results.get('uk_updated', 0)}")
+            print(f"   NI updated: {results.get('ni_updated', 0)}")
 
     except Exception as e:
-        print(f"❌ 脚本执行失败: {e}")
+        print(f"ERROR: Script execution failed - {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
