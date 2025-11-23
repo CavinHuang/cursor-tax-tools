@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 GitHub Actions 脚本: 执行关税数据爬取
-使用 scraper.py 的 BatchUpdateManager 进行数据爬取
+使用 scraper.py 进行数据爬取和更新
 """
 
 import asyncio
@@ -15,10 +15,55 @@ from datetime import datetime
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 
-async def run_scraper(update_uk: bool = True, update_ni: bool = True, batch_size: int = 100, delay: float = 0.2):
-    """运行爬虫
+async def run_initial_scrape():
+    """运行初始爬取（数据库为空时使用）
 
-    使用 scraper.py 中的 BatchUpdateManager 进行数据爬取
+    Returns:
+        爬取结果字典
+    """
+    try:
+        from scraper import TariffScraper
+
+        print("🔧 执行初始数据爬取...")
+
+        scraper = TariffScraper()
+        start_time = time.time()
+
+        # 执行爬取
+        await scraper.scrape_tariffs()
+
+        processing_time = (time.time() - start_time) / 60
+
+        # 获取数据库记录数
+        record_count = scraper.get_db_count()
+
+        results = {
+            'total': record_count,
+            'completed': record_count,
+            'successful': record_count,
+            'failed': 0,
+            'skipped': 0,
+            'uk_updated': record_count,
+            'ni_updated': 0,
+            'processing_time_minutes': processing_time,
+            'mode': 'initial_scrape'
+        }
+
+        print(f"✅ 初始爬取完成: 共爬取 {record_count} 条记录")
+        return results
+
+    except ImportError as e:
+        print(f"❌ 爬虫导入失败: {e}", file=sys.stderr)
+        return None
+    except Exception as e:
+        print(f"❌ 初始爬取失败: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+async def run_update_scrape(update_uk: bool = True, update_ni: bool = True, batch_size: int = 100, delay: float = 0.2):
+    """运行更新爬取（数据库有数据时使用）
 
     Args:
         update_uk: 是否更新英国数据
@@ -32,7 +77,7 @@ async def run_scraper(update_uk: bool = True, update_ni: bool = True, batch_size
     try:
         from scraper import BatchUpdateManager
 
-        print(f"🔧 使用 scraper.py 爬虫 (UK={update_uk}, NI={update_ni}, 批量={batch_size}, 延迟={delay}s)")
+        print(f"🔧 执行数据更新 (UK={update_uk}, NI={update_ni}, 批量={batch_size}, 延迟={delay}s)")
 
         # 创建进度回调
         def progress_callback(completed, total, message):
@@ -58,19 +103,37 @@ async def run_scraper(update_uk: bool = True, update_ni: bool = True, batch_size
 
         processing_time = (time.time() - start_time) / 60
         results['processing_time_minutes'] = processing_time
+        results['mode'] = 'update'
 
-        print(f"✅ 爬虫完成: 成功={results.get('successful', 0)}, 失败={results.get('failed', 0)}")
+        print(f"✅ 更新完成: 成功={results.get('successful', 0)}, 失败={results.get('failed', 0)}")
         return results
 
     except ImportError as e:
         print(f"❌ 爬虫导入失败: {e}", file=sys.stderr)
-        print("💡 提示: 请确保 scraper.py 存在于项目根目录", file=sys.stderr)
         return None
     except Exception as e:
-        print(f"❌ 爬虫执行失败: {e}", file=sys.stderr)
+        print(f"❌ 更新失败: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc()
         return None
+
+
+def check_database_status():
+    """检查数据库状态
+
+    Returns:
+        (exists: bool, record_count: int)
+    """
+    try:
+        from tariff_db import TariffDB
+
+        db = TariffDB()
+        record_count = db.get_record_count()
+
+        return True, record_count
+    except Exception as e:
+        print(f"⚠️ 检查数据库状态失败: {e}")
+        return False, 0
 
 
 def save_results(results: dict, output_path: str = 'update_results.json'):
@@ -108,6 +171,9 @@ def print_summary(results: dict):
     print("\n" + "="*50)
     print("📊 爬取结果摘要")
     print("="*50)
+
+    mode = results.get('mode', 'unknown')
+    print(f"🔧 运行模式: {'初始爬取' if mode == 'initial_scrape' else '数据更新'}")
 
     total = results.get('total', 0)
     completed = results.get('completed', 0)
@@ -148,7 +214,8 @@ def main():
         'update_ni': os.getenv('INPUT_UPDATE_NI', 'true').lower() == 'true',
         'batch_size': int(os.getenv('INPUT_BATCH_SIZE', '100')),
         'delay': float(os.getenv('INPUT_DELAY', '0.2')),
-        'output_file': os.getenv('OUTPUT_FILE', 'update_results.json')
+        'output_file': os.getenv('OUTPUT_FILE', 'update_results.json'),
+        'force_initial': os.getenv('FORCE_INITIAL_SCRAPE', 'false').lower() == 'true'
     }
 
     print("🚀 开始执行关税数据爬取...")
@@ -156,13 +223,23 @@ def main():
     print(f"⚙️ 参数: 批量={args['batch_size']}, 延迟={args['delay']}s")
 
     try:
-        # 运行爬虫
-        results = asyncio.run(run_scraper(
-            update_uk=args['update_uk'],
-            update_ni=args['update_ni'],
-            batch_size=args['batch_size'],
-            delay=args['delay']
-        ))
+        # 检查数据库状态
+        db_exists, record_count = check_database_status()
+
+        print(f"📊 数据库状态: {'存在' if db_exists else '不存在'}, 记录数: {record_count}")
+
+        # 决定运行模式
+        if args['force_initial'] or not db_exists or record_count == 0:
+            print("📍 模式: 初始爬取（数据库为空或强制初始化）")
+            results = asyncio.run(run_initial_scrape())
+        else:
+            print("📍 模式: 数据更新")
+            results = asyncio.run(run_update_scrape(
+                update_uk=args['update_uk'],
+                update_ni=args['update_ni'],
+                batch_size=args['batch_size'],
+                delay=args['delay']
+            ))
 
         if not results:
             print("❌ 爬虫执行失败", file=sys.stderr)
@@ -185,6 +262,7 @@ def main():
                 f.write(f"ni_updated={results.get('ni_updated', 0)}\n")
                 f.write(f"total={results.get('total', 0)}\n")
                 f.write(f"completed={results.get('completed', 0)}\n")
+                f.write(f"mode={results.get('mode', 'unknown')}\n")
         else:
             # 兼容旧版语法
             print(f"::set-output name=successful::{results.get('successful', 0)}")
