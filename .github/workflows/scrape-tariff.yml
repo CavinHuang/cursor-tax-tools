@@ -19,10 +19,6 @@ on:
         description: '更新北爱尔兰税率'
         required: false
         default: 'true'
-      use_optimized:
-        description: '使用优化版本'
-        required: false
-        default: 'true'
       min_change_threshold:
         description: '最小变更阈值'
         required: false
@@ -95,7 +91,6 @@ jobs:
     - name: 执行数据爬取
       id: scraping
       env:
-        USE_OPTIMIZED: ${{ github.event.inputs.use_optimized || 'true' }}
         INPUT_UPDATE_UK: ${{ github.event.inputs.update_uk || 'true' }}
         INPUT_UPDATE_NI: ${{ github.event.inputs.update_ni || 'true' }}
         INPUT_BATCH_SIZE: ${{ github.event.inputs.batch_size || '100' }}
