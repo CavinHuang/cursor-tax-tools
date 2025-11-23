@@ -12,7 +12,8 @@
       "Bash(gh repo list:*)",
       "Bash(GITHUB_REPOSITORY=CavinHuang/cursor-tax-tools python:*)",
       "Bash(gh release upload:*)",
-      "Bash(gh release delete:*)"
+      "Bash(gh release delete:*)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []
