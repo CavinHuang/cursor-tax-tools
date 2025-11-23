@@ -104,8 +104,8 @@ jobs:
         echo "INFO: 开始数据爬取..."
         START_TIME=$(date +%s)
 
-        # 执行爬虫脚本
-        python scripts/actions/execute_scraping.py
+        # 执行爬虫脚本（使用功能更完整的 run_scraper.py）
+        python scripts/actions/run_scraper.py
 
         # 计算处理时间
         END_TIME=$(date +%s)

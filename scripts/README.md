@@ -1,45 +1,53 @@
-# 📁 Scripts目录说明
+# 📁 Scripts 目录说明
 
-这个目录包含了GitHub Actions工作流和智能更新系统所需的所有脚本文件。
+这个目录包含了 GitHub Actions 工作流和智能更新系统所需的所有脚本文件。
 
 ## 📂 目录结构
 
 ```
 scripts/
-├── actions/                 # GitHub Actions专用脚本
-│   ├── generate_metadata.py # 生成数据库元数据
-│   └── run_scraper.py      # 执行数据爬取
-├── clients/                 # 客户端工具
+├── actions/                    # GitHub Actions 专用脚本
+│   ├── run_scraper.py         # 爬虫执行器（支持原版和优化版）
+│   ├── generate_metadata.py   # 生成数据库元数据
+│   └── validate_database.py   # 数据库验证脚本
+│
+├── scrapers/                   # 爬虫核心模块
+│   ├── __init__.py            # 包初始化文件
+│   └── tariff_scraper.py      # 关税数据爬虫（独立版本）
+│
+├── clients/                    # 客户端工具
 │   └── smart_update_client.py # 智能更新客户端
-├── monitoring/              # 监控工具
-│   └── performance_monitor.py  # 性能监控
-├── tools/                   # 工具脚本
-│   ├── cleanup_releases.py # Release清理工具
-│   └── scraper_config.json  # 配置文件
-└── README.md               # 本说明文件
+│
+├── monitoring/                 # 监控工具
+│   ├── performance_monitor.py # 性能监控
+│   └── simple_monitor.py      # 简易监控
+│
+├── tools/                      # 工具脚本
+│   ├── cleanup_releases.py    # Release 清理工具
+│   ├── create_latest_release.py # 创建最新 Release
+│   └── scraper_config.json    # 配置文件
+│
+└── README.md                   # 本说明文件
 ```
+
+## 🎯 职责划分
+
+### GitHub Action 负责
+- 📊 数据爬取：定时从英国海关网站爬取最新税率数据
+- ✅ 数据验证：检查数据库完整性和质量
+- 📝 元数据生成：生成版本、哈希等元信息
+- 📦 发布更新：将数据库和元数据发布到 GitHub Release
+
+### 客户端负责
+- 🔍 检查更新：下载元数据判断是否需要更新
+- ⬇️ 下载数据：从 GitHub Release 下载最新数据库
+- 💾 本地更新：替换本地数据库文件
+- 🔄 自动备份：更新前自动备份旧数据
 
 ## 🚀 核心脚本说明
 
-### 1. actions/generate_metadata.py
-**用途**: 生成数据库元数据文件，供客户端判断是否需要更新
-
-```bash
-# 基本用法
-python scripts/actions/generate_metadata.py tariffs.db data-123 update_results.json metadata.json
-
-# 输出环境变量供GitHub Actions使用
-python scripts/actions/generate_metadata.py tariffs.db "$VERSION" update_results.json
-```
-
-**功能**:
-- 计算数据库文件哈希值
-- 统计记录数量和数据质量
-- 生成版本信息
-- 输出客户端配置建议
-
-### 2. actions/run_scraper.py
-**用途**: 执行关税数据爬取，支持原版和优化版
+### 1. actions/run_scraper.py
+**用途**: 执行关税数据爬取，支持原版和优化版爬虫
 
 ```bash
 # 环境变量控制
@@ -53,17 +61,51 @@ python scripts/actions/run_scraper.py
 ```
 
 **功能**:
-- 支持原版和优化版爬虫
-- 自动选择合适的爬虫版本
+- 支持原版和优化版爬虫自动切换
 - 输出详细的统计信息
-- 保存结果到JSON文件
+- 保存结果到 JSON 文件供后续步骤使用
 
-### 3. clients/smart_update_client.py
+### 2. actions/generate_metadata.py
+**用途**: 生成数据库元数据文件，供客户端判断是否需要更新
+
+```bash
+python scripts/actions/generate_metadata.py tariffs.db data-123 update_results.json metadata.json
+```
+
+**功能**:
+- 计算数据库文件哈希值
+- 统计记录数量和数据质量
+- 生成版本信息
+
+### 3. actions/validate_database.py
+**用途**: 验证数据库完整性和数据质量
+
+```bash
+python scripts/actions/validate_database.py tariffs.db
+```
+
+### 4. scrapers/tariff_scraper.py
+**用途**: 爬虫核心模块（独立版本，可在 scripts/ 内独立使用）
+
+```python
+from scripts.scrapers.tariff_scraper import TariffScraper, BatchUpdateManager
+
+# 使用爬虫
+scraper = TariffScraper()
+tariffs = await scraper.scrape_tariffs()
+
+# 使用批量更新管理器
+manager = BatchUpdateManager()
+results = await manager.update_all_tariffs()
+```
+
+### 5. clients/smart_update_client.py
 **用途**: 客户端智能更新工具
 
 ```bash
 # 基本用法
-python scripts/clients/smart_update_client.py https://github.com/owner/repo/releases/download/latest-data/metadata.json
+python scripts/clients/smart_update_client.py \
+  --metadata-url "https://github.com/owner/repo/releases/download/latest-data/metadata.json"
 
 # 高级用法
 python scripts/clients/smart_update_client.py \
@@ -74,97 +116,34 @@ python scripts/clients/smart_update_client.py \
 ```
 
 **功能**:
-- 仅下载几KB的元数据进行判断
+- 仅下载几 KB 的元数据进行判断
 - 智能比较版本、哈希、时间戳
 - 支持强制更新和模拟运行
 - 自动备份和完整性验证
 
-### 4. monitoring/performance_monitor.py
-**用途**: 系统性能监控工具
-
-```bash
-# 监控60秒
-python scripts/monitoring/performance_monitor.py --duration 60
-
-# 检查系统要求
-python scripts/monitoring/performance_monitor.py --check
-
-# 自定义输出文件和间隔
-python scripts/monitoring/performance_monitor.py --duration 120 --interval 10 --output metrics.json
-```
-
-**功能**:
-- 监控CPU、内存、磁盘、网络使用
-- 进程级别的资源统计
-- 输出性能指标JSON文件
-- 系统要求检查
-
-### 5. tools/cleanup_releases.py
-**用途**: GitHub Release清理工具
-
-```bash
-# 清理旧Release（保留最新30个）
-python scripts/tools/cleanup_releases.py --repo owner/repo --keep 30
-
-# 分析Release情况
-python scripts/tools/cleanup_releases.py --repo owner/repo --analyze
-
-# 模拟运行
-python scripts/tools/cleanup_releases.py --repo owner/repo --keep 30 --dry-run
-```
-
-**功能**:
-- 清理指定数量的旧Release
-- 分析Release存储使用情况
-- 支持标签前缀过滤
-- 模拟运行预览效果
-
-## ⚙️ 配置文件
-
-### tools/scraper_config.json
-全局配置文件，包含：
-- 爬虫设置（并发数、批量大小等）
-- 性能配置（内存阈值、监控开关等）
-- 更新策略（阈值、备份设置等）
-- 数据库配置（优化、清理设置等）
-
-## 🚀 智能更新流程
-
-### 服务端（GitHub Actions - 精简版）
-```yaml
-# 当前使用的精简版工作流
-.github/workflows/scrape-tariff.yml
-
-# 1. 爬取数据（支持原版和优化版）
-python scripts/actions/run_scraper.py
-
-# 2. 基本统计检查
-sqlite3 tariffs.db "SELECT COUNT(*) FROM tariffs;"
-
-# 3. 生成元数据
-python scripts/actions/generate_metadata.py tariffs.db data-${{ github.run_number }} update_results.json
-
-# 4. 发布到Release（仅当有足够变更时）
-# - metadata.json (几KB)
-# - tariffs.db (完整数据库)
-```
-
-## 🚀 智能更新流程
+## 🔄 智能更新流程
 
 ### 服务端（GitHub Actions）
+
 ```yaml
+# 工作流文件: .github/workflows/scrape-tariff.yml
+
 # 1. 爬取数据
 python scripts/actions/run_scraper.py
 
-# 2. 生成元数据
-python scripts/actions/generate_metadata.py tariffs.db data-${{ github.run_number }} update_results.json
+# 2. 验证数据库
+python scripts/actions/validate_database.py tariffs.db
 
-# 3. 发布到Release（仅当有足够变更时）
+# 3. 生成元数据
+python scripts/actions/generate_metadata.py tariffs.db "$VERSION" update_results.json
+
+# 4. 发布到 Release（仅当有足够变更时）
 # - metadata.json (几KB)
 # - tariffs.db (完整数据库)
 ```
 
 ### 客户端使用
+
 ```python
 from scripts.clients.smart_update_client import SmartUpdateChecker
 
@@ -183,8 +162,8 @@ elif result['status'] == 'up_to_date':
 
 | 指标 | 传统方式 | 智能更新方式 |
 |------|----------|--------------|
-| **检查速度** | 下载7MB+数据库 | 下载几KB元数据 |
-| **网络流量** | 每次检查7MB+ | 仅需时7MB+ |
+| **检查速度** | 下载 7MB+ 数据库 | 下载几 KB 元数据 |
+| **网络流量** | 每次检查 7MB+ | 仅需时 7MB+ |
 | **响应时间** | 数十秒 | 毫秒级 |
 | **用户体验** | 慢速等待 | 即时响应 |
 
@@ -209,7 +188,7 @@ elif result['status'] == 'up_to_date':
    chmod +x scripts/**/*.py
    ```
 
-4. **GitHub CLI认证**
+4. **GitHub CLI 认证**
    ```bash
    gh auth login
    ```
@@ -230,13 +209,6 @@ elif result['status'] == 'up_to_date':
    ```bash
    python scripts/monitoring/performance_monitor.py --check
    ```
-
-## 📞 技术支持
-
-如有问题，请：
-1. 查看 [GitHub Issues](https://github.com/your-repo/issues)
-2. 检查 [Wiki文档](https://github.com/your-repo/wiki)
-3. 提交新的Issue并提供详细的错误信息
 
 ---
 
