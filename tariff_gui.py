@@ -1005,10 +1005,11 @@ class TariffGUI:
             try:
                 db_path = self.db_path_var.get()
                 if not os.path.exists(db_path):
-                    self.local_version_label.config(text="数据库文件不存在")
-                    self.local_records_label.config(text="0")
-                    self.update_status_label.config(text="需要创建", foreground="orange")
-                    self.add_remote_log("❌ 数据库文件不存在")
+                    # ✅ 使用队列更新UI
+                    self.queue.put((self.local_version_label.config, (), {'text': "数据库文件不存在"}))
+                    self.queue.put((self.local_records_label.config, (), {'text': "0"}))
+                    self.queue.put((self.update_status_label.config, (), {'text': "需要创建", 'foreground': "orange"}))
+                    self.queue.put((self.add_remote_log, ("❌ 数据库文件不存在",), {}))
                     return
 
                 # 初始化更新检查器
@@ -1019,19 +1020,20 @@ class TariffGUI:
                 local_metadata = self.smart_update_checker.load_local_metadata()
                 local_db_info = self.smart_update_checker.get_local_db_info()
 
+                # ✅ 使用队列更新UI
                 if local_metadata:
-                    self.local_version_label.config(text=local_metadata.get('version', '未知'))
+                    self.queue.put((self.local_version_label.config, (), {'text': local_metadata.get('version', '未知')}))
                 else:
-                    self.local_version_label.config(text="无元数据")
+                    self.queue.put((self.local_version_label.config, (), {'text': "无元数据"}))
 
-                self.local_records_label.config(text=str(local_db_info.get('record_count', 0)))
-                self.update_status_label.config(text="已检查", foreground="green")
-
-                self.add_remote_log("✅ 本地状态已刷新")
+                self.queue.put((self.local_records_label.config, (), {'text': str(local_db_info.get('record_count', 0))}))
+                self.queue.put((self.update_status_label.config, (), {'text': "已检查", 'foreground': "green"}))
+                self.queue.put((self.add_remote_log, ("✅ 本地状态已刷新",), {}))
 
             except Exception as e:
-                self.add_remote_log(f"❌ 刷新状态失败: {str(e)}")
-                self.update_status_label.config(text="检查失败", foreground="red")
+                # ✅ 使用队列更新UI
+                self.queue.put((self.add_remote_log, (f"❌ 刷新状态失败: {str(e)}",), {}))
+                self.queue.put((self.update_status_label.config, (), {'text': "检查失败", 'foreground': "red"}))
 
         threading.Thread(target=refresh_task, daemon=True).start()
 
@@ -1039,9 +1041,10 @@ class TariffGUI:
         """检查远程更新"""
         def check_task():
             try:
-                self.set_remote_ui_state(False)
-                self.remote_progress_bar.start()
-                self.add_remote_log("🔍 开始检查远程更新...")
+                # ✅ 使用队列更新UI
+                self.queue.put((self.set_remote_ui_state, (False,), {}))
+                self.queue.put((self.remote_progress_bar.start, (), {}))
+                self.queue.put((self.add_remote_log, ("🔍 开始检查远程更新...",), {}))
 
                 # 初始化更新检查器
                 db_path = self.db_path_var.get()
@@ -1051,55 +1054,61 @@ class TariffGUI:
                 # 下载远程元数据
                 remote_metadata = self.smart_update_checker.download_metadata()
                 if not remote_metadata:
-                    self.add_remote_log("❌ 无法下载远程元数据")
-                    self.remote_version_label.config(text="获取失败", foreground="red")
+                    # ✅ 使用队列更新UI
+                    self.queue.put((self.add_remote_log, ("❌ 无法下载远程元数据",), {}))
+                    self.queue.put((self.remote_version_label.config, (), {'text': "获取失败", 'foreground': "red"}))
                     return
 
                 # 更新远程版本信息
                 remote_version = remote_metadata.get('version', '未知')
                 remote_records = remote_metadata.get('record_count', 0)
-                self.remote_version_label.config(text=remote_version, foreground="green")
-                self.remote_records_label.config(text=str(remote_records), foreground="green")
+                # ✅ 使用队列更新UI
+                self.queue.put((self.remote_version_label.config, (), {'text': remote_version, 'foreground': "green"}))
+                self.queue.put((self.remote_records_label.config, (), {'text': str(remote_records), 'foreground': "green"}))
 
                 # 获取本地信息
                 local_metadata = self.smart_update_checker.load_local_metadata()
                 local_db_info = self.smart_update_checker.get_local_db_info()
 
                 # 更新本地版本信息
+                # ✅ 使用队列更新UI
                 if local_metadata:
                     local_version = local_metadata.get('version', '未知')
-                    self.local_version_label.config(text=local_version)
+                    self.queue.put((self.local_version_label.config, (), {'text': local_version}))
                 else:
-                    self.local_version_label.config(text="无元数据")
+                    self.queue.put((self.local_version_label.config, (), {'text': "无元数据"}))
 
-                self.local_records_label.config(text=str(local_db_info.get('record_count', 0)))
+                self.queue.put((self.local_records_label.config, (), {'text': str(local_db_info.get('record_count', 0))}))
 
                 # 检查是否需要更新
                 update_needed, reason, details = self.smart_update_checker.check_update_needed(
                     remote_metadata, local_db_info, local_metadata
                 )
 
+                # ✅ 使用队列更新UI
                 if update_needed:
-                    self.update_status_label.config(text=f"需要更新: {reason}", foreground="orange")
-                    self.add_remote_log(f"🔄 需要更新: {reason}")
+                    self.queue.put((self.update_status_label.config, (), {'text': f"需要更新: {reason}", 'foreground': "orange"}))
+                    self.queue.put((self.add_remote_log, (f"🔄 需要更新: {reason}",), {}))
 
                     priority = details.get('priority', 'medium')
                     if priority == 'high':
-                        self.add_remote_log("🔥 高优先级更新建议")
+                        self.queue.put((self.add_remote_log, ("🔥 高优先级更新建议",), {}))
                     elif priority == 'medium':
-                        self.add_remote_log("⚠️ 中优先级更新建议")
+                        self.queue.put((self.add_remote_log, ("⚠️ 中优先级更新建议",), {}))
                     else:
-                        self.add_remote_log("💡 低优先级更新建议")
+                        self.queue.put((self.add_remote_log, ("💡 低优先级更新建议",), {}))
                 else:
-                    self.update_status_label.config(text="已是最新", foreground="green")
-                    self.add_remote_log("✅ 数据库已是最新版本")
+                    self.queue.put((self.update_status_label.config, (), {'text': "已是最新", 'foreground': "green"}))
+                    self.queue.put((self.add_remote_log, ("✅ 数据库已是最新版本",), {}))
 
             except Exception as e:
-                self.add_remote_log(f"❌ 检查更新失败: {str(e)}")
-                self.update_status_label.config(text="检查失败", foreground="red")
+                # ✅ 使用队列更新UI
+                self.queue.put((self.add_remote_log, (f"❌ 检查更新失败: {str(e)}",), {}))
+                self.queue.put((self.update_status_label.config, (), {'text': "检查失败", 'foreground': "red"}))
             finally:
-                self.remote_progress_bar.stop()
-                self.set_remote_ui_state(True)
+                # ✅ 使用队列更新UI
+                self.queue.put((self.remote_progress_bar.stop, (), {}))
+                self.queue.put((self.set_remote_ui_state, (True,), {}))
 
         threading.Thread(target=check_task, daemon=True).start()
 
@@ -1107,9 +1116,10 @@ class TariffGUI:
         """强制更新"""
         def update_task():
             try:
-                self.set_remote_ui_state(False)
-                self.remote_progress_bar.start()
-                self.add_remote_log("🔄 开始强制更新...")
+                # ✅ 使用队列更新UI
+                self.queue.put((self.set_remote_ui_state, (False,), {}))
+                self.queue.put((self.remote_progress_bar.start, (), {}))
+                self.queue.put((self.add_remote_log, ("🔄 开始强制更新...",), {}))
 
                 # 初始化更新检查器
                 db_path = self.db_path_var.get()
@@ -1119,22 +1129,25 @@ class TariffGUI:
                 # 执行强制更新
                 result = self.smart_update_checker.check_and_update(force_update=True)
 
+                # ✅ 使用队列更新UI
                 if result['status'] == 'success':
-                    self.add_remote_log(f"✅ 更新成功: {result['message']}")
-                    self.update_status_label.config(text="更新成功", foreground="green")
+                    self.queue.put((self.add_remote_log, (f"✅ 更新成功: {result['message']}",), {}))
+                    self.queue.put((self.update_status_label.config, (), {'text': "更新成功", 'foreground': "green"}))
 
                     # 刷新状态信息
-                    self.refresh_remote_status()
+                    self.queue.put((self.refresh_remote_status, (), {}))
                 else:
-                    self.add_remote_log(f"❌ 更新失败: {result['message']}")
-                    self.update_status_label.config(text="更新失败", foreground="red")
+                    self.queue.put((self.add_remote_log, (f"❌ 更新失败: {result['message']}",), {}))
+                    self.queue.put((self.update_status_label.config, (), {'text': "更新失败", 'foreground': "red"}))
 
             except Exception as e:
-                self.add_remote_log(f"❌ 强制更新异常: {str(e)}")
-                self.update_status_label.config(text="更新异常", foreground="red")
+                # ✅ 使用队列更新UI
+                self.queue.put((self.add_remote_log, (f"❌ 强制更新异常: {str(e)}",), {}))
+                self.queue.put((self.update_status_label.config, (), {'text': "更新异常", 'foreground': "red"}))
             finally:
-                self.remote_progress_bar.stop()
-                self.set_remote_ui_state(True)
+                # ✅ 使用队列更新UI
+                self.queue.put((self.remote_progress_bar.stop, (), {}))
+                self.queue.put((self.set_remote_ui_state, (True,), {}))
 
         threading.Thread(target=update_task, daemon=True).start()
 
