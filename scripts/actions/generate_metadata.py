@@ -174,7 +174,8 @@ def generate_metadata(db_path: str = 'tariffs.db',
             'ni_updated': update_results.get('ni_updated', 0),
             'new_records': 0,
             'deleted_records': 0,
-            'modified_records': update_results.get('uk_updated', 0) + update_results.get('ni_updated', 0)
+            # ✅ 使用去重后的实际修改记录数（避免重复计数）
+            'modified_records': update_results.get('modified_records', len(update_results.get('updated_codes', [])))
         },
 
         'update_statistics': {
