@@ -12,6 +12,17 @@ from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
 import logging
 
+# ✅ 导入自定义异常类
+from exceptions import (
+    UpdateError,
+    NetworkError,
+    DatabaseError,
+    MetadataError,
+    IntegrityError,
+    FileOperationError,
+    BackupError
+)
+
 logger = logging.getLogger(__name__)
 
 class SmartUpdateChecker:
@@ -65,7 +76,12 @@ class SmartUpdateChecker:
         return False
 
     def download_metadata(self, timeout: int = 30) -> Optional[Dict]:
-        """下载远程元数据"""
+        """下载远程元数据
+
+        Raises:
+            NetworkError: 网络连接失败、超时或HTTP错误
+            MetadataError: 元数据格式错误或解析失败
+        """
         try:
             logger.info(f"📡 下载元数据: {self.metadata_url}")
             response = requests.get(self.metadata_url, timeout=timeout)
@@ -75,12 +91,26 @@ class SmartUpdateChecker:
             logger.info(f"✅ 元数据下载成功: 版本 {metadata.get('version')}")
             return metadata
 
+        except requests.Timeout:
+            error_msg = f"下载元数据超时（{timeout}秒）"
+            logger.error(f"❌ {error_msg}")
+            raise NetworkError(error_msg)
+        except requests.ConnectionError as e:
+            error_msg = f"网络连接失败: {str(e)}"
+            logger.error(f"❌ {error_msg}")
+            raise NetworkError(error_msg)
+        except requests.HTTPError as e:
+            error_msg = f"HTTP错误 {e.response.status_code}: {str(e)}"
+            logger.error(f"❌ {error_msg}")
+            raise NetworkError(error_msg)
         except requests.RequestException as e:
-            logger.error(f"❌ 元数据下载失败: {str(e)}")
-            return None
+            error_msg = f"请求失败: {str(e)}"
+            logger.error(f"❌ {error_msg}")
+            raise NetworkError(error_msg)
         except json.JSONDecodeError as e:
-            logger.error(f"❌ 元数据解析失败: {str(e)}")
-            return None
+            error_msg = f"元数据格式错误: {str(e)}"
+            logger.error(f"❌ {error_msg}")
+            raise MetadataError(error_msg)
 
     def load_local_metadata(self) -> Optional[Dict]:
         """加载本地元数据"""
@@ -105,7 +135,12 @@ class SmartUpdateChecker:
             logger.error(f"❌ 保存本地元数据失败: {str(e)}")
 
     def get_local_db_info(self) -> Dict:
-        """获取本地数据库信息"""
+        """获取本地数据库信息
+
+        Raises:
+            FileOperationError: 文件读取失败
+            DatabaseError: 数据库查询失败
+        """
         if not os.path.exists(self.db_path):
             return {'exists': False}
 
@@ -114,18 +149,21 @@ class SmartUpdateChecker:
 
             # 计算本地文件哈希
             hash_sha256 = hashlib.sha256()
-            with open(self.db_path, 'rb') as f:
-                while chunk := f.read(8192):
-                    hash_sha256.update(chunk)
-
-            # 获取数据库记录数
             try:
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-                record_count = cursor.execute("SELECT COUNT(*) FROM tariffs").fetchone()[0]
-                conn.close()
-            except:
-                record_count = 0
+                with open(self.db_path, 'rb') as f:
+                    while chunk := f.read(8192):
+                        hash_sha256.update(chunk)
+            except IOError as e:
+                raise FileOperationError(f"读取数据库文件失败: {str(e)}")
+
+            # ✅ 使用 with 语句管理数据库连接（避免资源泄漏）
+            try:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    record_count = cursor.execute("SELECT COUNT(*) FROM tariffs").fetchone()[0]
+            except sqlite3.Error as e:
+                logger.warning(f"⚠️ 数据库查询失败: {str(e)}")
+                raise DatabaseError(f"数据库查询失败: {str(e)}")
 
             return {
                 'exists': True,
@@ -135,9 +173,12 @@ class SmartUpdateChecker:
                 'record_count': record_count
             }
 
+        except (FileOperationError, DatabaseError):
+            # 重新抛出自定义异常
+            raise
         except Exception as e:
             logger.error(f"❌ 获取本地数据库信息失败: {str(e)}")
-            return {'exists': False, 'error': str(e)}
+            raise FileOperationError(f"获取数据库信息失败: {str(e)}")
 
     def check_update_needed(self, remote_metadata: Dict, local_db_info: Dict, local_metadata: Dict = None) -> Tuple[bool, str, Dict]:
         """检查是否需要更新"""
@@ -335,10 +376,41 @@ class SmartUpdateChecker:
                 result['message'] = '数据库下载失败'
                 return result
 
-        except Exception as e:
-            logger.error(f"❌ 检查更新失败: {str(e)}")
+        except NetworkError as e:
+            logger.error(f"❌ 网络错误: {str(e)}")
             result['status'] = 'error'
-            result['message'] = f'检查更新失败: {str(e)}'
+            result['message'] = f'网络错误: {str(e)}'
+            result['error_type'] = 'network'
+            return result
+        except MetadataError as e:
+            logger.error(f"❌ 元数据错误: {str(e)}")
+            result['status'] = 'error'
+            result['message'] = f'元数据错误: {str(e)}'
+            result['error_type'] = 'metadata'
+            return result
+        except DatabaseError as e:
+            logger.error(f"❌ 数据库错误: {str(e)}")
+            result['status'] = 'error'
+            result['message'] = f'数据库错误: {str(e)}'
+            result['error_type'] = 'database'
+            return result
+        except FileOperationError as e:
+            logger.error(f"❌ 文件操作错误: {str(e)}")
+            result['status'] = 'error'
+            result['message'] = f'文件操作错误: {str(e)}'
+            result['error_type'] = 'file'
+            return result
+        except UpdateError as e:
+            logger.error(f"❌ 更新错误: {str(e)}")
+            result['status'] = 'error'
+            result['message'] = f'更新错误: {str(e)}'
+            result['error_type'] = 'update'
+            return result
+        except Exception as e:
+            logger.error(f"❌ 未知错误: {str(e)}")
+            result['status'] = 'error'
+            result['message'] = f'未知错误: {str(e)}'
+            result['error_type'] = 'unknown'
             return result
 
 # 使用示例
