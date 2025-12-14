@@ -137,6 +137,11 @@ class TariffGUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("关税查询工具")
+
+        # ✅ 添加远程更新操作锁
+        self.remote_update_lock = threading.Lock()
+        self.remote_update_in_progress = False
+
         self.setup_ui()
         self.setup_api()
         self.setup_queue()
@@ -1001,153 +1006,179 @@ class TariffGUI:
 
     def refresh_remote_status(self):
         """刷新远程状态"""
+        # ✅ 检查是否有操作正在进行
+        if self.remote_update_in_progress:
+            messagebox.showwarning("提示", "远程更新操作正在进行中，请稍候")
+            return
+
         def refresh_task():
-            try:
-                db_path = self.db_path_var.get()
-                if not os.path.exists(db_path):
+            with self.remote_update_lock:
+                self.remote_update_in_progress = True
+                try:
+                    db_path = self.db_path_var.get()
+                    if not os.path.exists(db_path):
+                        # ✅ 使用队列更新UI
+                        self.queue.put((self.local_version_label.config, (), {'text': "数据库文件不存在"}))
+                        self.queue.put((self.local_records_label.config, (), {'text': "0"}))
+                        self.queue.put((self.update_status_label.config, (), {'text': "需要创建", 'foreground': "orange"}))
+                        self.queue.put((self.add_remote_log, ("❌ 数据库文件不存在",), {}))
+                        return
+
+                    # 初始化更新检查器
+                    metadata_url = self.metadata_url_var.get()
+                    self.smart_update_checker = SmartUpdateChecker(metadata_url, db_path)
+
+                    # 获取本地信息
+                    local_metadata = self.smart_update_checker.load_local_metadata()
+                    local_db_info = self.smart_update_checker.get_local_db_info()
+
                     # ✅ 使用队列更新UI
-                    self.queue.put((self.local_version_label.config, (), {'text': "数据库文件不存在"}))
-                    self.queue.put((self.local_records_label.config, (), {'text': "0"}))
-                    self.queue.put((self.update_status_label.config, (), {'text': "需要创建", 'foreground': "orange"}))
-                    self.queue.put((self.add_remote_log, ("❌ 数据库文件不存在",), {}))
-                    return
+                    if local_metadata:
+                        self.queue.put((self.local_version_label.config, (), {'text': local_metadata.get('version', '未知')}))
+                    else:
+                        self.queue.put((self.local_version_label.config, (), {'text': "无元数据"}))
 
-                # 初始化更新检查器
-                metadata_url = self.metadata_url_var.get()
-                self.smart_update_checker = SmartUpdateChecker(metadata_url, db_path)
+                    self.queue.put((self.local_records_label.config, (), {'text': str(local_db_info.get('record_count', 0))}))
+                    self.queue.put((self.update_status_label.config, (), {'text': "已检查", 'foreground': "green"}))
+                    self.queue.put((self.add_remote_log, ("✅ 本地状态已刷新",), {}))
 
-                # 获取本地信息
-                local_metadata = self.smart_update_checker.load_local_metadata()
-                local_db_info = self.smart_update_checker.get_local_db_info()
-
-                # ✅ 使用队列更新UI
-                if local_metadata:
-                    self.queue.put((self.local_version_label.config, (), {'text': local_metadata.get('version', '未知')}))
-                else:
-                    self.queue.put((self.local_version_label.config, (), {'text': "无元数据"}))
-
-                self.queue.put((self.local_records_label.config, (), {'text': str(local_db_info.get('record_count', 0))}))
-                self.queue.put((self.update_status_label.config, (), {'text': "已检查", 'foreground': "green"}))
-                self.queue.put((self.add_remote_log, ("✅ 本地状态已刷新",), {}))
-
-            except Exception as e:
-                # ✅ 使用队列更新UI
-                self.queue.put((self.add_remote_log, (f"❌ 刷新状态失败: {str(e)}",), {}))
-                self.queue.put((self.update_status_label.config, (), {'text': "检查失败", 'foreground': "red"}))
+                except Exception as e:
+                    # ✅ 使用队列更新UI
+                    self.queue.put((self.add_remote_log, (f"❌ 刷新状态失败: {str(e)}",), {}))
+                    self.queue.put((self.update_status_label.config, (), {'text': "检查失败", 'foreground': "red"}))
+                finally:
+                    self.remote_update_in_progress = False
 
         threading.Thread(target=refresh_task, daemon=True).start()
 
     def check_remote_update(self):
         """检查远程更新"""
+        # ✅ 检查是否有操作正在进行
+        if self.remote_update_in_progress:
+            messagebox.showwarning("提示", "远程更新操作正在进行中，请稍候")
+            return
+
         def check_task():
-            try:
-                # ✅ 使用队列更新UI
-                self.queue.put((self.set_remote_ui_state, (False,), {}))
-                self.queue.put((self.remote_progress_bar.start, (), {}))
-                self.queue.put((self.add_remote_log, ("🔍 开始检查远程更新...",), {}))
-
-                # 初始化更新检查器
-                db_path = self.db_path_var.get()
-                metadata_url = self.metadata_url_var.get()
-                self.smart_update_checker = SmartUpdateChecker(metadata_url, db_path)
-
-                # 下载远程元数据
-                remote_metadata = self.smart_update_checker.download_metadata()
-                if not remote_metadata:
+            with self.remote_update_lock:
+                self.remote_update_in_progress = True
+                try:
                     # ✅ 使用队列更新UI
-                    self.queue.put((self.add_remote_log, ("❌ 无法下载远程元数据",), {}))
-                    self.queue.put((self.remote_version_label.config, (), {'text': "获取失败", 'foreground': "red"}))
-                    return
+                    self.queue.put((self.set_remote_ui_state, (False,), {}))
+                    self.queue.put((self.remote_progress_bar.start, (), {}))
+                    self.queue.put((self.add_remote_log, ("🔍 开始检查远程更新...",), {}))
 
-                # 更新远程版本信息
-                remote_version = remote_metadata.get('version', '未知')
-                remote_records = remote_metadata.get('record_count', 0)
-                # ✅ 使用队列更新UI
-                self.queue.put((self.remote_version_label.config, (), {'text': remote_version, 'foreground': "green"}))
-                self.queue.put((self.remote_records_label.config, (), {'text': str(remote_records), 'foreground': "green"}))
+                    # 初始化更新检查器
+                    db_path = self.db_path_var.get()
+                    metadata_url = self.metadata_url_var.get()
+                    self.smart_update_checker = SmartUpdateChecker(metadata_url, db_path)
 
-                # 获取本地信息
-                local_metadata = self.smart_update_checker.load_local_metadata()
-                local_db_info = self.smart_update_checker.get_local_db_info()
+                    # 下载远程元数据
+                    remote_metadata = self.smart_update_checker.download_metadata()
+                    if not remote_metadata:
+                        # ✅ 使用队列更新UI
+                        self.queue.put((self.add_remote_log, ("❌ 无法下载远程元数据",), {}))
+                        self.queue.put((self.remote_version_label.config, (), {'text': "获取失败", 'foreground': "red"}))
+                        return
 
-                # 更新本地版本信息
-                # ✅ 使用队列更新UI
-                if local_metadata:
-                    local_version = local_metadata.get('version', '未知')
-                    self.queue.put((self.local_version_label.config, (), {'text': local_version}))
-                else:
-                    self.queue.put((self.local_version_label.config, (), {'text': "无元数据"}))
+                    # 更新远程版本信息
+                    remote_version = remote_metadata.get('version', '未知')
+                    remote_records = remote_metadata.get('record_count', 0)
+                    # ✅ 使用队列更新UI
+                    self.queue.put((self.remote_version_label.config, (), {'text': remote_version, 'foreground': "green"}))
+                    self.queue.put((self.remote_records_label.config, (), {'text': str(remote_records), 'foreground': "green"}))
 
-                self.queue.put((self.local_records_label.config, (), {'text': str(local_db_info.get('record_count', 0))}))
+                    # 获取本地信息
+                    local_metadata = self.smart_update_checker.load_local_metadata()
+                    local_db_info = self.smart_update_checker.get_local_db_info()
 
-                # 检查是否需要更新
-                update_needed, reason, details = self.smart_update_checker.check_update_needed(
-                    remote_metadata, local_db_info, local_metadata
-                )
-
-                # ✅ 使用队列更新UI
-                if update_needed:
-                    self.queue.put((self.update_status_label.config, (), {'text': f"需要更新: {reason}", 'foreground': "orange"}))
-                    self.queue.put((self.add_remote_log, (f"🔄 需要更新: {reason}",), {}))
-
-                    priority = details.get('priority', 'medium')
-                    if priority == 'high':
-                        self.queue.put((self.add_remote_log, ("🔥 高优先级更新建议",), {}))
-                    elif priority == 'medium':
-                        self.queue.put((self.add_remote_log, ("⚠️ 中优先级更新建议",), {}))
+                    # 更新本地版本信息
+                    # ✅ 使用队列更新UI
+                    if local_metadata:
+                        local_version = local_metadata.get('version', '未知')
+                        self.queue.put((self.local_version_label.config, (), {'text': local_version}))
                     else:
-                        self.queue.put((self.add_remote_log, ("💡 低优先级更新建议",), {}))
-                else:
-                    self.queue.put((self.update_status_label.config, (), {'text': "已是最新", 'foreground': "green"}))
-                    self.queue.put((self.add_remote_log, ("✅ 数据库已是最新版本",), {}))
+                        self.queue.put((self.local_version_label.config, (), {'text': "无元数据"}))
 
-            except Exception as e:
-                # ✅ 使用队列更新UI
-                self.queue.put((self.add_remote_log, (f"❌ 检查更新失败: {str(e)}",), {}))
-                self.queue.put((self.update_status_label.config, (), {'text': "检查失败", 'foreground': "red"}))
-            finally:
-                # ✅ 使用队列更新UI
-                self.queue.put((self.remote_progress_bar.stop, (), {}))
-                self.queue.put((self.set_remote_ui_state, (True,), {}))
+                    self.queue.put((self.local_records_label.config, (), {'text': str(local_db_info.get('record_count', 0))}))
+
+                    # 检查是否需要更新
+                    update_needed, reason, details = self.smart_update_checker.check_update_needed(
+                        remote_metadata, local_db_info, local_metadata
+                    )
+
+                    # ✅ 使用队列更新UI
+                    if update_needed:
+                        self.queue.put((self.update_status_label.config, (), {'text': f"需要更新: {reason}", 'foreground': "orange"}))
+                        self.queue.put((self.add_remote_log, (f"🔄 需要更新: {reason}",), {}))
+
+                        priority = details.get('priority', 'medium')
+                        if priority == 'high':
+                            self.queue.put((self.add_remote_log, ("🔥 高优先级更新建议",), {}))
+                        elif priority == 'medium':
+                            self.queue.put((self.add_remote_log, ("⚠️ 中优先级更新建议",), {}))
+                        else:
+                            self.queue.put((self.add_remote_log, ("💡 低优先级更新建议",), {}))
+                    else:
+                        self.queue.put((self.update_status_label.config, (), {'text': "已是最新", 'foreground': "green"}))
+                        self.queue.put((self.add_remote_log, ("✅ 数据库已是最新版本",), {}))
+
+                except Exception as e:
+                    # ✅ 使用队列更新UI
+                    self.queue.put((self.add_remote_log, (f"❌ 检查更新失败: {str(e)}",), {}))
+                    self.queue.put((self.update_status_label.config, (), {'text': "检查失败", 'foreground': "red"}))
+                finally:
+                    # ✅ 使用队列更新UI
+                    self.queue.put((self.remote_progress_bar.stop, (), {}))
+                    self.queue.put((self.set_remote_ui_state, (True,), {}))
+                    self.remote_update_in_progress = False
 
         threading.Thread(target=check_task, daemon=True).start()
 
     def force_remote_update(self):
         """强制更新"""
+        # ✅ 检查是否有操作正在进行
+        if self.remote_update_in_progress:
+            messagebox.showwarning("提示", "远程更新操作正在进行中，请稍候")
+            return
+
         def update_task():
-            try:
-                # ✅ 使用队列更新UI
-                self.queue.put((self.set_remote_ui_state, (False,), {}))
-                self.queue.put((self.remote_progress_bar.start, (), {}))
-                self.queue.put((self.add_remote_log, ("🔄 开始强制更新...",), {}))
+            with self.remote_update_lock:
+                self.remote_update_in_progress = True
+                try:
+                    # ✅ 使用队列更新UI
+                    self.queue.put((self.set_remote_ui_state, (False,), {}))
+                    self.queue.put((self.remote_progress_bar.start, (), {}))
+                    self.queue.put((self.add_remote_log, ("🔄 开始强制更新...",), {}))
 
-                # 初始化更新检查器
-                db_path = self.db_path_var.get()
-                metadata_url = self.metadata_url_var.get()
-                self.smart_update_checker = SmartUpdateChecker(metadata_url, db_path)
+                    # 初始化更新检查器
+                    db_path = self.db_path_var.get()
+                    metadata_url = self.metadata_url_var.get()
+                    self.smart_update_checker = SmartUpdateChecker(metadata_url, db_path)
 
-                # 执行强制更新
-                result = self.smart_update_checker.check_and_update(force_update=True)
+                    # 执行强制更新
+                    result = self.smart_update_checker.check_and_update(force_update=True)
 
-                # ✅ 使用队列更新UI
-                if result['status'] == 'success':
-                    self.queue.put((self.add_remote_log, (f"✅ 更新成功: {result['message']}",), {}))
-                    self.queue.put((self.update_status_label.config, (), {'text': "更新成功", 'foreground': "green"}))
+                    # ✅ 使用队列更新UI
+                    if result['status'] == 'success':
+                        self.queue.put((self.add_remote_log, (f"✅ 更新成功: {result['message']}",), {}))
+                        self.queue.put((self.update_status_label.config, (), {'text': "更新成功", 'foreground': "green"}))
 
-                    # 刷新状态信息
-                    self.queue.put((self.refresh_remote_status, (), {}))
-                else:
-                    self.queue.put((self.add_remote_log, (f"❌ 更新失败: {result['message']}",), {}))
-                    self.queue.put((self.update_status_label.config, (), {'text': "更新失败", 'foreground': "red"}))
+                        # 刷新状态信息（注意：这会尝试获取锁，但当前已持有锁，需要在锁外执行）
+                        # 暂时移除自动刷新，避免死锁
+                        # self.queue.put((self.refresh_remote_status, (), {}))
+                    else:
+                        self.queue.put((self.add_remote_log, (f"❌ 更新失败: {result['message']}",), {}))
+                        self.queue.put((self.update_status_label.config, (), {'text': "更新失败", 'foreground': "red"}))
 
-            except Exception as e:
-                # ✅ 使用队列更新UI
-                self.queue.put((self.add_remote_log, (f"❌ 强制更新异常: {str(e)}",), {}))
-                self.queue.put((self.update_status_label.config, (), {'text': "更新异常", 'foreground': "red"}))
-            finally:
-                # ✅ 使用队列更新UI
-                self.queue.put((self.remote_progress_bar.stop, (), {}))
-                self.queue.put((self.set_remote_ui_state, (True,), {}))
+                except Exception as e:
+                    # ✅ 使用队列更新UI
+                    self.queue.put((self.add_remote_log, (f"❌ 强制更新异常: {str(e)}",), {}))
+                    self.queue.put((self.update_status_label.config, (), {'text': "更新异常", 'foreground': "red"}))
+                finally:
+                    # ✅ 使用队列更新UI
+                    self.queue.put((self.remote_progress_bar.stop, (), {}))
+                    self.queue.put((self.set_remote_ui_state, (True,), {}))
+                    self.remote_update_in_progress = False
 
         threading.Thread(target=update_task, daemon=True).start()
 
