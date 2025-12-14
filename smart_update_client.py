@@ -285,7 +285,8 @@ class SmartUpdateChecker:
                 # 保存新的元数据
                 self.save_local_metadata(remote_metadata)
 
-                result['status'] = 'updated'
+                # ✅ 统一返回状态为 'success'（与GUI期望一致）
+                result['status'] = 'success'
                 result['message'] = f"更新完成: {reason}"
                 result['details']['new_version'] = remote_metadata.get('version')
                 return result
