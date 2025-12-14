@@ -105,9 +105,10 @@ jobs:
         }
         # 创建发布目录
         mkdir release -ErrorAction SilentlyContinue
+        mkdir release/datas -ErrorAction SilentlyContinue
         Copy-Item "dist/$env:APP_NAME.exe" "release/"
         Copy-Item "templates" "release/" -Recurse
-        Copy-Item "tariffs.db" "release/"
+        Copy-Item "tariffs.db" "release/datas/"
         # 创建ZIP文件
         echo "Creating ZIP file..."
         cd release

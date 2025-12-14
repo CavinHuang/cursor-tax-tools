@@ -37,6 +37,12 @@ class SmartUpdateChecker:
         self.local_metadata_path = f"{db_path}.metadata.json"
         self.max_backups = 3  # ✅ 保留最近3个备份
 
+        # ✅ 确保数据库文件所在的目录存在
+        db_dir = os.path.dirname(db_path)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+            logger.info(f"📁 创建数据目录: {db_dir}")
+
     def _get_backup_path(self, index: int = 0) -> str:
         """获取备份文件路径（统一命名规则）"""
         if index == 0:
@@ -175,13 +181,15 @@ class SmartUpdateChecker:
                 raise FileOperationError(f"读取数据库文件失败: {str(e)}")
 
             # ✅ 使用 with 语句管理数据库连接（避免资源泄漏）
+            record_count = 0
             try:
                 with sqlite3.connect(self.db_path) as conn:
                     cursor = conn.cursor()
                     record_count = cursor.execute("SELECT COUNT(*) FROM tariffs").fetchone()[0]
             except sqlite3.Error as e:
-                logger.warning(f"⚠️ 数据库查询失败: {str(e)}")
-                raise DatabaseError(f"数据库查询失败: {str(e)}")
+                # 如果表不存在，记录警告但不抛出异常，返回 record_count = 0
+                logger.warning(f"⚠️ 数据库查询失败（可能是空数据库或表不存在）: {str(e)}")
+                record_count = 0
 
             return {
                 'exists': True,
@@ -191,8 +199,8 @@ class SmartUpdateChecker:
                 'record_count': record_count
             }
 
-        except (FileOperationError, DatabaseError):
-            # 重新抛出自定义异常
+        except FileOperationError:
+            # 重新抛出文件操作异常
             raise
         except Exception as e:
             logger.error(f"❌ 获取本地数据库信息失败: {str(e)}")
