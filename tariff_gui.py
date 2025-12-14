@@ -142,9 +142,16 @@ class TariffGUI:
         self.remote_update_lock = threading.Lock()
         self.remote_update_in_progress = False
 
+        # ✅ 添加线程池管理（避免无限制创建线程）
+        from concurrent.futures import ThreadPoolExecutor
+        self.thread_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="TariffGUI")
+
         self.setup_ui()
         self.setup_api()
         self.setup_queue()
+
+        # ✅ 绑定窗口关闭事件
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def setup_ui(self):
         """设置UI界面"""
@@ -1049,7 +1056,8 @@ class TariffGUI:
                 finally:
                     self.remote_update_in_progress = False
 
-        threading.Thread(target=refresh_task, daemon=True).start()
+        # ✅ 使用线程池提交任务（避免无限制创建线程）
+        self.thread_pool.submit(refresh_task)
 
     def check_remote_update(self):
         """检查远程更新"""
@@ -1132,7 +1140,8 @@ class TariffGUI:
                     self.queue.put((self.set_remote_ui_state, (True,), {}))
                     self.remote_update_in_progress = False
 
-        threading.Thread(target=check_task, daemon=True).start()
+        # ✅ 使用线程池提交任务（避免无限制创建线程）
+        self.thread_pool.submit(check_task)
 
     def force_remote_update(self):
         """强制更新"""
@@ -1180,7 +1189,8 @@ class TariffGUI:
                     self.queue.put((self.set_remote_ui_state, (True,), {}))
                     self.remote_update_in_progress = False
 
-        threading.Thread(target=update_task, daemon=True).start()
+        # ✅ 使用线程池提交任务（避免无限制创建线程）
+        self.thread_pool.submit(update_task)
 
     def set_remote_ui_state(self, enabled):
         """设置远程更新UI状态"""
@@ -1655,6 +1665,33 @@ class TariffGUI:
             except Exception as e:
                 logger.error(f"导出错误报告失败: {str(e)}")
                 messagebox.showerror("导出失败", f"导出错误报告失败: {str(e)}")
+
+    def on_closing(self):
+        """窗口关闭时的清理工作"""
+        # ✅ 检查是否有正在进行的操作
+        if self.remote_update_in_progress:
+            if not messagebox.askyesno(
+                "确认关闭",
+                "远程更新操作正在进行中，强制关闭可能导致数据损坏。\n确定要关闭吗？"
+            ):
+                return
+
+        # ✅ 关闭线程池（等待当前任务完成，但不接受新任务）
+        if hasattr(self, 'thread_pool'):
+            logger.info("正在关闭线程池...")
+            self.thread_pool.shutdown(wait=False)
+
+        # ✅ 关闭数据库连接
+        if hasattr(self, 'db'):
+            try:
+                self.db.close()
+                logger.info("数据库连接已关闭")
+            except Exception as e:
+                logger.error(f"关闭数据库连接失败: {str(e)}")
+
+        # ✅ 销毁窗口
+        logger.info("关闭GUI窗口")
+        self.root.destroy()
 
     def run(self):
         """运行GUI"""
