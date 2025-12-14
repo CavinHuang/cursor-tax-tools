@@ -23,6 +23,9 @@ from exceptions import (
     BackupError
 )
 
+# ✅ 导入重试机制库
+import backoff
+
 logger = logging.getLogger(__name__)
 
 class SmartUpdateChecker:
@@ -75,8 +78,23 @@ class SmartUpdateChecker:
                 return False
         return False
 
+    @backoff.on_exception(
+        backoff.expo,
+        (requests.Timeout, requests.ConnectionError),
+        max_tries=3,
+        max_time=60,
+        on_backoff=lambda details: logger.warning(
+            f"⏱️ 重试下载元数据 (第{details['tries']}次尝试，等待{details['wait']:.1f}秒)..."
+        )
+    )
     def download_metadata(self, timeout: int = 30) -> Optional[Dict]:
-        """下载远程元数据
+        """下载远程元数据（带重试机制）
+
+        重试策略：
+        - 最多重试3次
+        - 最长重试时间60秒
+        - 指数退避策略（1s, 2s, 4s...）
+        - 仅对超时和连接错误重试
 
         Raises:
             NetworkError: 网络连接失败、超时或HTTP错误
@@ -253,8 +271,31 @@ class SmartUpdateChecker:
 
         return update_needed, " | ".join(reasons) if reasons else "无需更新", {'priority': priority}
 
+    @backoff.on_exception(
+        backoff.expo,
+        (requests.Timeout, requests.ConnectionError),
+        max_tries=2,
+        max_time=120,
+        on_backoff=lambda details: logger.warning(
+            f"⏱️ 重试下载数据库 (第{details['tries']}次尝试，等待{details['wait']:.1f}秒)..."
+        )
+    )
     def download_database(self, download_url: str, verify_checksum: bool = True) -> bool:
-        """下载数据库文件"""
+        """下载数据库文件（带重试机制）
+
+        重试策略：
+        - 最多重试2次（大文件下载，避免过多重试）
+        - 最长重试时间120秒
+        - 指数退避策略
+        - 仅对超时和连接错误重试
+
+        Args:
+            download_url: 数据库下载URL
+            verify_checksum: 是否验证文件完整性
+
+        Returns:
+            bool: 下载是否成功
+        """
         backup_path = None
         try:
             logger.info(f"📥 开始下载数据库: {download_url}")
@@ -293,11 +334,20 @@ class SmartUpdateChecker:
                         logger.error("❌ 文件完整性验证失败")
                         # ✅ 使用统一的恢复方法
                         self._restore_backup()
-                        return False
+                        raise IntegrityError("文件完整性验证失败")
 
             logger.info("✅ 数据库更新完成")
             return True
 
+        except (requests.Timeout, requests.ConnectionError):
+            # 重新抛出，让装饰器处理重试
+            raise
+        except IntegrityError:
+            # 完整性错误不重试，直接失败
+            logger.error("❌ 文件完整性验证失败，不重试")
+            if backup_path:
+                self._restore_backup()
+            return False
         except Exception as e:
             logger.error(f"❌ 数据库下载失败: {str(e)}")
             # ✅ 使用统一的恢复方法
