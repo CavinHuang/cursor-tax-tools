@@ -21,6 +21,48 @@ class SmartUpdateChecker:
         self.metadata_url = metadata_url
         self.db_path = db_path
         self.local_metadata_path = f"{db_path}.metadata.json"
+        self.max_backups = 3  # ✅ 保留最近3个备份
+
+    def _get_backup_path(self, index: int = 0) -> str:
+        """获取备份文件路径（统一命名规则）"""
+        if index == 0:
+            return f"{self.db_path}.backup"
+        return f"{self.db_path}.backup.{index}"
+
+    def _create_backup(self) -> Optional[str]:
+        """创建备份并管理备份数量"""
+        if not os.path.exists(self.db_path):
+            return None
+
+        try:
+            # ✅ 轮转备份：.backup -> .backup.1 -> .backup.2
+            for i in range(self.max_backups - 1, 0, -1):
+                old_path = self._get_backup_path(i - 1)
+                new_path = self._get_backup_path(i)
+                if os.path.exists(old_path):
+                    os.replace(old_path, new_path)
+
+            # 创建新备份
+            backup_path = self._get_backup_path(0)
+            os.replace(self.db_path, backup_path)
+            logger.info(f"💾 创建备份: {backup_path}")
+            return backup_path
+        except Exception as e:
+            logger.error(f"❌ 创建备份失败: {str(e)}")
+            return None
+
+    def _restore_backup(self) -> bool:
+        """恢复最新的备份"""
+        backup_path = self._get_backup_path(0)
+        if os.path.exists(backup_path):
+            try:
+                os.replace(backup_path, self.db_path)
+                logger.info(f"♻️ 已恢复备份: {backup_path}")
+                return True
+            except Exception as e:
+                logger.error(f"❌ 恢复备份失败: {str(e)}")
+                return False
+        return False
 
     def download_metadata(self, timeout: int = 30) -> Optional[Dict]:
         """下载远程元数据"""
@@ -172,14 +214,12 @@ class SmartUpdateChecker:
 
     def download_database(self, download_url: str, verify_checksum: bool = True) -> bool:
         """下载数据库文件"""
+        backup_path = None
         try:
             logger.info(f"📥 开始下载数据库: {download_url}")
 
-            # 备份现有文件
-            if os.path.exists(self.db_path):
-                backup_path = f"{self.db_path}.backup"
-                os.replace(self.db_path, backup_path)
-                logger.info(f"💾 创建备份: {backup_path}")
+            # ✅ 使用统一的备份方法
+            backup_path = self._create_backup()
 
             # 下载文件
             response = requests.get(download_url, stream=True, timeout=300)  # 5分钟超时
@@ -210,8 +250,8 @@ class SmartUpdateChecker:
                     local_info = self.get_local_db_info()
                     if local_info.get('file_hash') != remote_metadata.get('file_hash'):
                         logger.error("❌ 文件完整性验证失败")
-                        if os.path.exists(backup_path):
-                            os.replace(backup_path, self.db_path)
+                        # ✅ 使用统一的恢复方法
+                        self._restore_backup()
                         return False
 
             logger.info("✅ 数据库更新完成")
@@ -219,9 +259,9 @@ class SmartUpdateChecker:
 
         except Exception as e:
             logger.error(f"❌ 数据库下载失败: {str(e)}")
-            # 恢复备份
-            if os.path.exists(f"{self.db_path}.backup"):
-                os.replace(f"{self.db_path}.backup", self.db_path)
+            # ✅ 使用统一的恢复方法
+            if backup_path:
+                self._restore_backup()
             return False
 
     def check_and_update(self, force_update: bool = False) -> Dict:
