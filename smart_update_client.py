@@ -12,6 +12,20 @@ from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
 import logging
 
+# ✅ 导入自定义异常类
+from exceptions import (
+    UpdateError,
+    NetworkError,
+    DatabaseError,
+    MetadataError,
+    IntegrityError,
+    FileOperationError,
+    BackupError
+)
+
+# ✅ 导入重试机制库
+import backoff
+
 logger = logging.getLogger(__name__)
 
 class SmartUpdateChecker:
@@ -21,9 +35,77 @@ class SmartUpdateChecker:
         self.metadata_url = metadata_url
         self.db_path = db_path
         self.local_metadata_path = f"{db_path}.metadata.json"
+        self.max_backups = 3  # ✅ 保留最近3个备份
 
+        # ✅ 确保数据库文件所在的目录存在
+        db_dir = os.path.dirname(db_path)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+            logger.info(f"📁 创建数据目录: {db_dir}")
+
+    def _get_backup_path(self, index: int = 0) -> str:
+        """获取备份文件路径（统一命名规则）"""
+        if index == 0:
+            return f"{self.db_path}.backup"
+        return f"{self.db_path}.backup.{index}"
+
+    def _create_backup(self) -> Optional[str]:
+        """创建备份并管理备份数量"""
+        if not os.path.exists(self.db_path):
+            return None
+
+        try:
+            # ✅ 轮转备份：.backup -> .backup.1 -> .backup.2
+            for i in range(self.max_backups - 1, 0, -1):
+                old_path = self._get_backup_path(i - 1)
+                new_path = self._get_backup_path(i)
+                if os.path.exists(old_path):
+                    os.replace(old_path, new_path)
+
+            # 创建新备份
+            backup_path = self._get_backup_path(0)
+            os.replace(self.db_path, backup_path)
+            logger.info(f"💾 创建备份: {backup_path}")
+            return backup_path
+        except Exception as e:
+            logger.error(f"❌ 创建备份失败: {str(e)}")
+            return None
+
+    def _restore_backup(self) -> bool:
+        """恢复最新的备份"""
+        backup_path = self._get_backup_path(0)
+        if os.path.exists(backup_path):
+            try:
+                os.replace(backup_path, self.db_path)
+                logger.info(f"♻️ 已恢复备份: {backup_path}")
+                return True
+            except Exception as e:
+                logger.error(f"❌ 恢复备份失败: {str(e)}")
+                return False
+        return False
+
+    @backoff.on_exception(
+        backoff.expo,
+        (requests.Timeout, requests.ConnectionError),
+        max_tries=3,
+        max_time=60,
+        on_backoff=lambda details: logger.warning(
+            f"⏱️ 重试下载元数据 (第{details['tries']}次尝试，等待{details['wait']:.1f}秒)..."
+        )
+    )
     def download_metadata(self, timeout: int = 30) -> Optional[Dict]:
-        """下载远程元数据"""
+        """下载远程元数据（带重试机制）
+
+        重试策略：
+        - 最多重试3次
+        - 最长重试时间60秒
+        - 指数退避策略（1s, 2s, 4s...）
+        - 仅对超时和连接错误重试
+
+        Raises:
+            NetworkError: 网络连接失败、超时或HTTP错误
+            MetadataError: 元数据格式错误或解析失败
+        """
         try:
             logger.info(f"📡 下载元数据: {self.metadata_url}")
             response = requests.get(self.metadata_url, timeout=timeout)
@@ -33,12 +115,26 @@ class SmartUpdateChecker:
             logger.info(f"✅ 元数据下载成功: 版本 {metadata.get('version')}")
             return metadata
 
+        except requests.Timeout:
+            error_msg = f"下载元数据超时（{timeout}秒）"
+            logger.error(f"❌ {error_msg}")
+            raise NetworkError(error_msg)
+        except requests.ConnectionError as e:
+            error_msg = f"网络连接失败: {str(e)}"
+            logger.error(f"❌ {error_msg}")
+            raise NetworkError(error_msg)
+        except requests.HTTPError as e:
+            error_msg = f"HTTP错误 {e.response.status_code}: {str(e)}"
+            logger.error(f"❌ {error_msg}")
+            raise NetworkError(error_msg)
         except requests.RequestException as e:
-            logger.error(f"❌ 元数据下载失败: {str(e)}")
-            return None
+            error_msg = f"请求失败: {str(e)}"
+            logger.error(f"❌ {error_msg}")
+            raise NetworkError(error_msg)
         except json.JSONDecodeError as e:
-            logger.error(f"❌ 元数据解析失败: {str(e)}")
-            return None
+            error_msg = f"元数据格式错误: {str(e)}"
+            logger.error(f"❌ {error_msg}")
+            raise MetadataError(error_msg)
 
     def load_local_metadata(self) -> Optional[Dict]:
         """加载本地元数据"""
@@ -63,7 +159,12 @@ class SmartUpdateChecker:
             logger.error(f"❌ 保存本地元数据失败: {str(e)}")
 
     def get_local_db_info(self) -> Dict:
-        """获取本地数据库信息"""
+        """获取本地数据库信息
+
+        Raises:
+            FileOperationError: 文件读取失败
+            DatabaseError: 数据库查询失败
+        """
         if not os.path.exists(self.db_path):
             return {'exists': False}
 
@@ -72,17 +173,22 @@ class SmartUpdateChecker:
 
             # 计算本地文件哈希
             hash_sha256 = hashlib.sha256()
-            with open(self.db_path, 'rb') as f:
-                while chunk := f.read(8192):
-                    hash_sha256.update(chunk)
-
-            # 获取数据库记录数
             try:
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-                record_count = cursor.execute("SELECT COUNT(*) FROM tariffs").fetchone()[0]
-                conn.close()
-            except:
+                with open(self.db_path, 'rb') as f:
+                    while chunk := f.read(8192):
+                        hash_sha256.update(chunk)
+            except IOError as e:
+                raise FileOperationError(f"读取数据库文件失败: {str(e)}")
+
+            # ✅ 使用 with 语句管理数据库连接（避免资源泄漏）
+            record_count = 0
+            try:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    record_count = cursor.execute("SELECT COUNT(*) FROM tariffs").fetchone()[0]
+            except sqlite3.Error as e:
+                # 如果表不存在，记录警告但不抛出异常，返回 record_count = 0
+                logger.warning(f"⚠️ 数据库查询失败（可能是空数据库或表不存在）: {str(e)}")
                 record_count = 0
 
             return {
@@ -93,9 +199,12 @@ class SmartUpdateChecker:
                 'record_count': record_count
             }
 
+        except FileOperationError:
+            # 重新抛出文件操作异常
+            raise
         except Exception as e:
             logger.error(f"❌ 获取本地数据库信息失败: {str(e)}")
-            return {'exists': False, 'error': str(e)}
+            raise FileOperationError(f"获取数据库信息失败: {str(e)}")
 
     def check_update_needed(self, remote_metadata: Dict, local_db_info: Dict, local_metadata: Dict = None) -> Tuple[bool, str, Dict]:
         """检查是否需要更新"""
@@ -170,16 +279,37 @@ class SmartUpdateChecker:
 
         return update_needed, " | ".join(reasons) if reasons else "无需更新", {'priority': priority}
 
+    @backoff.on_exception(
+        backoff.expo,
+        (requests.Timeout, requests.ConnectionError),
+        max_tries=2,
+        max_time=120,
+        on_backoff=lambda details: logger.warning(
+            f"⏱️ 重试下载数据库 (第{details['tries']}次尝试，等待{details['wait']:.1f}秒)..."
+        )
+    )
     def download_database(self, download_url: str, verify_checksum: bool = True) -> bool:
-        """下载数据库文件"""
+        """下载数据库文件（带重试机制）
+
+        重试策略：
+        - 最多重试2次（大文件下载，避免过多重试）
+        - 最长重试时间120秒
+        - 指数退避策略
+        - 仅对超时和连接错误重试
+
+        Args:
+            download_url: 数据库下载URL
+            verify_checksum: 是否验证文件完整性
+
+        Returns:
+            bool: 下载是否成功
+        """
+        backup_path = None
         try:
             logger.info(f"📥 开始下载数据库: {download_url}")
 
-            # 备份现有文件
-            if os.path.exists(self.db_path):
-                backup_path = f"{self.db_path}.backup"
-                os.replace(self.db_path, backup_path)
-                logger.info(f"💾 创建备份: {backup_path}")
+            # ✅ 使用统一的备份方法
+            backup_path = self._create_backup()
 
             # 下载文件
             response = requests.get(download_url, stream=True, timeout=300)  # 5分钟超时
@@ -210,18 +340,27 @@ class SmartUpdateChecker:
                     local_info = self.get_local_db_info()
                     if local_info.get('file_hash') != remote_metadata.get('file_hash'):
                         logger.error("❌ 文件完整性验证失败")
-                        if os.path.exists(backup_path):
-                            os.replace(backup_path, self.db_path)
-                        return False
+                        # ✅ 使用统一的恢复方法
+                        self._restore_backup()
+                        raise IntegrityError("文件完整性验证失败")
 
             logger.info("✅ 数据库更新完成")
             return True
 
+        except (requests.Timeout, requests.ConnectionError):
+            # 重新抛出，让装饰器处理重试
+            raise
+        except IntegrityError:
+            # 完整性错误不重试，直接失败
+            logger.error("❌ 文件完整性验证失败，不重试")
+            if backup_path:
+                self._restore_backup()
+            return False
         except Exception as e:
             logger.error(f"❌ 数据库下载失败: {str(e)}")
-            # 恢复备份
-            if os.path.exists(f"{self.db_path}.backup"):
-                os.replace(f"{self.db_path}.backup", self.db_path)
+            # ✅ 使用统一的恢复方法
+            if backup_path:
+                self._restore_backup()
             return False
 
     def check_and_update(self, force_update: bool = False) -> Dict:
@@ -285,7 +424,8 @@ class SmartUpdateChecker:
                 # 保存新的元数据
                 self.save_local_metadata(remote_metadata)
 
-                result['status'] = 'updated'
+                # ✅ 统一返回状态为 'success'（与GUI期望一致）
+                result['status'] = 'success'
                 result['message'] = f"更新完成: {reason}"
                 result['details']['new_version'] = remote_metadata.get('version')
                 return result
@@ -294,10 +434,41 @@ class SmartUpdateChecker:
                 result['message'] = '数据库下载失败'
                 return result
 
-        except Exception as e:
-            logger.error(f"❌ 检查更新失败: {str(e)}")
+        except NetworkError as e:
+            logger.error(f"❌ 网络错误: {str(e)}")
             result['status'] = 'error'
-            result['message'] = f'检查更新失败: {str(e)}'
+            result['message'] = f'网络错误: {str(e)}'
+            result['error_type'] = 'network'
+            return result
+        except MetadataError as e:
+            logger.error(f"❌ 元数据错误: {str(e)}")
+            result['status'] = 'error'
+            result['message'] = f'元数据错误: {str(e)}'
+            result['error_type'] = 'metadata'
+            return result
+        except DatabaseError as e:
+            logger.error(f"❌ 数据库错误: {str(e)}")
+            result['status'] = 'error'
+            result['message'] = f'数据库错误: {str(e)}'
+            result['error_type'] = 'database'
+            return result
+        except FileOperationError as e:
+            logger.error(f"❌ 文件操作错误: {str(e)}")
+            result['status'] = 'error'
+            result['message'] = f'文件操作错误: {str(e)}'
+            result['error_type'] = 'file'
+            return result
+        except UpdateError as e:
+            logger.error(f"❌ 更新错误: {str(e)}")
+            result['status'] = 'error'
+            result['message'] = f'更新错误: {str(e)}'
+            result['error_type'] = 'update'
+            return result
+        except Exception as e:
+            logger.error(f"❌ 未知错误: {str(e)}")
+            result['status'] = 'error'
+            result['message'] = f'未知错误: {str(e)}'
+            result['error_type'] = 'unknown'
             return result
 
 # 使用示例

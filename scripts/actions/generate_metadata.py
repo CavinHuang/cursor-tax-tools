@@ -58,17 +58,32 @@ def get_database_stats(db_path: str) -> Dict:
             "SELECT COUNT(*) FROM tariffs WHERE north_ireland_rate IS NOT NULL AND north_ireland_rate != ''"
         ).fetchone()[0]
 
-        # 常见税率
+        # 常见税率（增加到10条，与根目录版本一致）
         rate_dist = cursor.execute("""
             SELECT rate, COUNT(*) as count
             FROM tariffs
             WHERE rate IS NOT NULL AND rate != ''
             GROUP BY rate
             ORDER BY count DESC
-            LIMIT 5
+            LIMIT 10
         """).fetchall()
 
         stats['common_rates'] = [rate for rate, count in rate_dist]
+
+        # ✅ 动态计算税率范围（从根目录版本合并）
+        if rate_dist:
+            numeric_rates = []
+            for rate, count in rate_dist:
+                try:
+                    # 提取数字部分
+                    rate_value = float(rate.replace('%', ''))
+                    numeric_rates.append(rate_value)
+                except ValueError:
+                    continue
+
+            if numeric_rates:
+                stats['uk_rate_min'] = f"{min(numeric_rates)}%"
+                stats['uk_rate_max'] = f"{max(numeric_rates)}%"
 
         # 分类统计
         try:
@@ -77,6 +92,16 @@ def get_database_stats(db_path: str) -> Dict:
             """).fetchone()[0]
         except:
             pass
+
+        # ✅ 更新历史统计（从根目录版本合并）
+        try:
+            recent_updates = cursor.execute("""
+                SELECT COUNT(*) FROM update_history
+                WHERE timestamp > datetime('now', '-1 day')
+            """).fetchone()[0]
+            stats['recent_updates_24h'] = recent_updates
+        except:
+            stats['recent_updates_24h'] = 0
 
         # 错误统计
         try:
@@ -149,7 +174,8 @@ def generate_metadata(db_path: str = 'tariffs.db',
             'ni_updated': update_results.get('ni_updated', 0),
             'new_records': 0,
             'deleted_records': 0,
-            'modified_records': update_results.get('uk_updated', 0) + update_results.get('ni_updated', 0)
+            # ✅ 使用去重后的实际修改记录数（避免重复计数）
+            'modified_records': update_results.get('modified_records', len(update_results.get('updated_codes', [])))
         },
 
         'update_statistics': {

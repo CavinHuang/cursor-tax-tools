@@ -709,7 +709,11 @@ class BatchUpdateManager:
             'uk_updated': 0,
             'ni_updated': 0,
             'start_time': None,
-            'errors': []
+            'errors': [],
+            # ✅ 添加集合记录实际更新的商品编码（避免重复计数）
+            'uk_updated_codes': set(),
+            'ni_updated_codes': set(),
+            'updated_codes': set()  # 所有更新的商品编码（去重）
         }
 
         logger.info("BatchUpdateManager 初始化完成")
@@ -830,7 +834,11 @@ class BatchUpdateManager:
             'skipped': 0,
             'uk_updated': 0,
             'ni_updated': 0,
-            'errors': []
+            'errors': [],
+            # ✅ 添加集合记录实际更新的商品编码
+            'uk_updated_codes': set(),
+            'ni_updated_codes': set(),
+            'updated_codes': set()
         }
 
         for result in batch_results:
@@ -842,10 +850,20 @@ class BatchUpdateManager:
             if result['status'] == 'success':
                 batch_stats['successful'] += 1
                 update_result = result.get('result', {})
+                code = result.get('code')
+
+                # ✅ 记录更新的商品编码到集合（避免重复计数）
                 if update_result.get('uk_updated', False):
                     batch_stats['uk_updated'] += 1
+                    if code:
+                        batch_stats['uk_updated_codes'].add(code)
+                        batch_stats['updated_codes'].add(code)
+
                 if update_result.get('ni_updated', False):
                     batch_stats['ni_updated'] += 1
+                    if code:
+                        batch_stats['ni_updated_codes'].add(code)
+                        batch_stats['updated_codes'].add(code)
             elif result['status'] == 'skipped':
                 batch_stats['skipped'] += 1
             else:
@@ -890,7 +908,11 @@ class BatchUpdateManager:
             'uk_updated': 0,
             'ni_updated': 0,
             'start_time': None,
-            'errors': []
+            'errors': [],
+            # ✅ 添加集合记录实际更新的商品编码（避免重复计数）
+            'uk_updated_codes': set(),
+            'ni_updated_codes': set(),
+            'updated_codes': set()
         }
 
         try:
@@ -939,6 +961,11 @@ class BatchUpdateManager:
                 self.stats['uk_updated'] += batch_stats['uk_updated']
                 self.stats['ni_updated'] += batch_stats['ni_updated']
                 self.stats['errors'].extend(batch_stats['errors'])
+
+                # ✅ 合并商品编码集合（避免重复计数）
+                self.stats['uk_updated_codes'].update(batch_stats.get('uk_updated_codes', set()))
+                self.stats['ni_updated_codes'].update(batch_stats.get('ni_updated_codes', set()))
+                self.stats['updated_codes'].update(batch_stats.get('updated_codes', set()))
 
                 # 更新进度
                 completed = min(i + batch_size, total_count)
@@ -1037,6 +1064,16 @@ class BatchUpdateManager:
     def get_stats(self):
         """获取当前统计信息"""
         stats = self.stats.copy()
+
+        # ✅ 将集合转换为列表（用于JSON序列化）并添加去重后的实际更新记录数
+        if 'uk_updated_codes' in stats:
+            stats['uk_updated_codes'] = list(stats['uk_updated_codes'])
+        if 'ni_updated_codes' in stats:
+            stats['ni_updated_codes'] = list(stats['ni_updated_codes'])
+        if 'updated_codes' in stats:
+            stats['updated_codes'] = list(stats['updated_codes'])
+            # 添加去重后的实际更新记录数（这才是真实的修改记录数）
+            stats['modified_records'] = len(stats['updated_codes'])
 
         # 计算处理速度
         if stats['start_time'] and stats['completed'] > 0:
