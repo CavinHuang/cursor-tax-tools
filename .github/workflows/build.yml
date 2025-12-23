@@ -62,12 +62,8 @@ jobs:
     - name: Build with PyInstaller
       shell: pwsh
       run: |
-        # 修改spec文件中的name
-        $content = Get-Content build_win.spec -Raw
-        $content = $content -replace "name='英国海关编码税率查询工具'", "name='$env:APP_NAME'"
-        [System.IO.File]::WriteAllText("build_win.spec", $content, [System.Text.Encoding]::UTF8)
-        # 运行PyInstaller（使用 spec 文件，包含 hiddenimports 配置）
-        pyinstaller --clean build_win.spec
+        # 运行PyInstaller（命令行方式，添加 hidden-import 参数）
+        pyinstaller --onefile --noconsole --hidden-import backoff --hidden-import Levenshtein ./tariff_gui.py --name "$env:APP_NAME"
         # 检查构建结果
         if (-not (Test-Path "dist/$env:APP_NAME.exe")) {
             echo "Error: Executable not found"
