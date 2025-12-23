@@ -1,13 +1,64 @@
 import sqlite3
 import logging
+import os
+import sys
+import shutil
 from typing import List, Dict, Optional
 import threading
 
 logger = logging.getLogger(__name__)
 
+
+def get_writable_db_path(db_path: str = "tariffs.db") -> str:
+    """获取可写的数据库文件路径
+
+    Args:
+        db_path: 数据库文件路径（相对或绝对）
+
+    Returns:
+        str: 可写的数据库文件绝对路径
+    """
+    # 如果是绝对路径，直接返回
+    if os.path.isabs(db_path):
+        return db_path
+
+    # 获取用户可写目录（优先使用用户目录，其次使用当前目录）
+    if os.name == 'nt':  # Windows
+        user_dir = os.path.expanduser("~")
+        app_dir = os.path.join(user_dir, "uk-tax-tools")
+    else:  # macOS/Linux
+        user_dir = os.path.expanduser("~")
+        app_dir = os.path.join(user_dir, ".uk-tax-tools")
+
+    # 确保目录存在
+    os.makedirs(app_dir, exist_ok=True)
+
+    # 构建数据库路径
+    writable_path = os.path.join(app_dir, os.path.basename(db_path))
+
+    # 如果可写位置的数据库不存在，尝试从打包资源复制
+    if not os.path.exists(writable_path):
+        try:
+            # 尝试从 PyInstaller 临时目录获取
+            if hasattr(sys, '_MEIPASS'):
+                resource_db = os.path.join(sys._MEIPASS, os.path.basename(db_path))
+                if os.path.exists(resource_db):
+                    shutil.copy2(resource_db, writable_path)
+                    logger.info(f"✅ 从打包资源复制数据库到: {writable_path}")
+            # 尝试从当前目录获取
+            elif os.path.exists(db_path):
+                shutil.copy2(db_path, writable_path)
+                logger.info(f"✅ 从当前目录复制数据库到: {writable_path}")
+        except Exception as e:
+            logger.warning(f"⚠️ 无法复制初始数据库: {e}")
+
+    return writable_path
+
+
 class TariffDB:
     def __init__(self, db_path: str = "tariffs.db"):
-        self.db_path = db_path
+        # 确保使用可写的数据库路径
+        self.db_path = get_writable_db_path(db_path)
         self._local = threading.local()
         self._create_tables()
 

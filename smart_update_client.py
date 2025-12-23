@@ -26,6 +26,9 @@ from exceptions import (
 # ✅ 导入重试机制库
 import backoff
 
+# ✅ 导入数据库路径处理函数
+from tariff_db import get_writable_db_path
+
 logger = logging.getLogger(__name__)
 
 class SmartUpdateChecker:
@@ -33,12 +36,13 @@ class SmartUpdateChecker:
 
     def __init__(self, metadata_url: str, db_path: str = 'tariffs.db'):
         self.metadata_url = metadata_url
-        self.db_path = db_path
-        self.local_metadata_path = f"{db_path}.metadata.json"
+        # 确保使用可写的数据库路径
+        self.db_path = get_writable_db_path(db_path)
+        self.local_metadata_path = f"{self.db_path}.metadata.json"
         self.max_backups = 3  # ✅ 保留最近3个备份
 
         # ✅ 确保数据库文件所在的目录存在
-        db_dir = os.path.dirname(db_path)
+        db_dir = os.path.dirname(self.db_path)
         if db_dir and not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
             logger.info(f"📁 创建数据目录: {db_dir}")

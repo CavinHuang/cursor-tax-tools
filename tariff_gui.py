@@ -9,11 +9,33 @@ import queue
 import threading
 import asyncio
 import os
+import sys
 from datetime import datetime
 from batch_gui import BatchProcessFrame
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+
+def resource_path(relative_path: str) -> str:
+    """获取资源文件的绝对路径
+
+    在开发环境返回相对路径，在 PyInstaller 打包后返回正确的资源路径
+
+    Args:
+        relative_path: 相对路径
+
+    Returns:
+        str: 资源文件的绝对路径
+    """
+    try:
+        # PyInstaller 创建的临时文件夹路径
+        base_path = sys._MEIPASS
+    except AttributeError:
+        # 开发环境，使用当前目录
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
 
 
 class UpdateDialog:
