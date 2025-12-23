@@ -2,25 +2,56 @@ import pandas as pd
 import logging
 from datetime import datetime
 import os
+import sys
 from typing import List, Dict, Optional
 from tariff_api import TariffAPI
 import queue
 
 logger = logging.getLogger(__name__)
 
+
+def get_writable_output_path(output_dir: str = "output") -> str:
+    """获取可写的输出目录路径
+
+    Args:
+        output_dir: 输出目录名称
+
+    Returns:
+        str: 可写的输出目录绝对路径
+    """
+    # 如果是绝对路径，直接返回
+    if os.path.isabs(output_dir):
+        return output_dir
+
+    # 获取用户可写目录（与数据库使用相同的目录结构）
+    if os.name == 'nt':  # Windows
+        user_dir = os.path.expanduser("~")
+        app_dir = os.path.join(user_dir, "uk-tax-tools")
+    else:  # macOS/Linux
+        user_dir = os.path.expanduser("~")
+        app_dir = os.path.join(user_dir, ".uk-tax-tools")
+
+    # 构建输出目录路径
+    writable_path = os.path.join(app_dir, output_dir)
+
+    # 确保目录存在
+    os.makedirs(writable_path, exist_ok=True)
+
+    logger.info(f"📁 输出目录: {writable_path}")
+
+    return writable_path
+
+
 class BatchProcessor:
     def __init__(self, output_dir: str = "output"):
         self.api = TariffAPI()
-        self.output_dir = output_dir
+        # 确保使用可写的输出目录
+        self.output_dir = get_writable_output_path(output_dir)
         self.progress = 0
         self.total = 0
         self.status = "idle"
         self.log_queue = queue.Queue()
         self.current_file = None
-
-        # 创建输出目录
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
 
     def process_file(self, file_path: str) -> Optional[str]:
         """处理Excel文件
