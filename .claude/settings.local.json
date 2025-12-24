@@ -14,7 +14,12 @@
       "Bash(gh release upload:*)",
       "Bash(gh release delete:*)",
       "Bash(find:*)",
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git tag:*)",
+      "Bash(git push:*)",
+      "Bash(git restore:*)"
     ],
     "deny": [],
     "ask": []
