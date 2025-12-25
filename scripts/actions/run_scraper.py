@@ -23,6 +23,7 @@ async def run_initial_scrape():
     """
     try:
         from scraper import TariffScraper
+        from tariff_db import TariffDB
 
         print("🔧 执行初始数据爬取...")
 
@@ -37,6 +38,10 @@ async def run_initial_scrape():
         # 获取数据库记录数
         record_count = scraper.get_db_count()
 
+        # 获取北爱尔兰数据数量（不再硬编码为0）
+        db = TariffDB()
+        ni_count = db.get_north_ireland_count()
+
         results = {
             'total': record_count,
             'completed': record_count,
@@ -44,7 +49,7 @@ async def run_initial_scrape():
             'failed': 0,
             'skipped': 0,
             'uk_updated': record_count,
-            'ni_updated': 0,
+            'ni_updated': ni_count,  # 从数据库统计实际数量
             'processing_time_minutes': processing_time,
             'mode': 'initial_scrape'
         }

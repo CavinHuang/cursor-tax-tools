@@ -216,6 +216,17 @@ class TariffDB:
             logger.error(f"获取已存在北爱尔兰编码失败: {str(e)}")
             return set()
 
+    def get_north_ireland_count(self) -> int:
+        """获取有北爱尔兰数据的记录数量"""
+        try:
+            cur = self.conn.execute(
+                "SELECT COUNT(*) FROM tariffs WHERE north_ireland_rate IS NOT NULL AND north_ireland_rate != ''"
+            )
+            return cur.fetchone()[0]
+        except Exception as e:
+            logger.error(f"获取北爱尔兰记录数量失败: {str(e)}")
+            return 0
+
     def update_north_ireland_tariff(self, code: str, north_ireland_rate: str, north_ireland_url: str):
         try:
             with self.conn:

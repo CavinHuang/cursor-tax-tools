@@ -150,6 +150,8 @@ class TariffScraper:
 
                 result['code'] = code
                 result['url'] = url or f"https://www.trade-tariff.service.gov.uk/commodities/{code}"
+                # 自动生成北爱尔兰 URL（注意双斜杠）
+                result['north_ireland_url'] = f"https://www.trade-tariff.service.gov.uk/xi/commodities//{code}"
 
             # 查找商品描述（更新：使用正确的class名）
             desc_elem = soup.find('h1', class_='commodity-header')
@@ -458,16 +460,20 @@ class TariffScraper:
 
                 async def fetch_ni_data():
                     """抓取并解析北爱尔兰数据"""
-                    if not ni_url:
-                        return None, "未提供北爱尔兰URL"
+                    # 如果没有提供 ni_url，自动生成
+                    current_ni_url = ni_url
+                    if not current_ni_url:
+                        current_ni_url = f"https://www.trade-tariff.service.gov.uk/xi/commodities//{code}"
+                        logger.debug(f"自动生成北爱尔兰 URL: {current_ni_url}")
+
                     try:
-                        results = await self.scrape_with_retry([ni_url])
+                        results = await self.scrape_with_retry([current_ni_url])
                         status, content = results[0]
                         if status != 200 or not content:
                             if status == 404:
                                 return None, None  # 404不记录错误
                             return None, f"北爱尔兰网页内容为空（状态码: {status}）"
-                        return temp_parser.parse_commodity_page(content, ni_url), None
+                        return temp_parser.parse_commodity_page(content, current_ni_url), None
                     except Exception as e:
                         return None, f"北爱尔兰数据抓取失败: {str(e)}"
 
@@ -769,6 +775,11 @@ class BatchUpdateManager:
                     code = tariff['code']
                     uk_url = tariff.get('url', '')
                     ni_url = tariff.get('north_ireland_url', '')
+
+                    # 如果需要更新北爱尔兰数据且 URL 为空，自动生成
+                    if update_ni and not ni_url:
+                        ni_url = f"https://www.trade-tariff.service.gov.uk/xi/commodities//{code}"
+                        logger.debug(f"为商品 {code} 自动生成北爱尔兰 URL")
 
                     # 检查是否需要更新
                     if not update_uk:
