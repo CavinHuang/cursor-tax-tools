@@ -77,8 +77,18 @@ class ShardExecutor:
         try:
             # 动态导入爬虫模块
             from scraper import TariffScraper
+            from tariff_db import TariffDB
+
+            # 创建独立的数据库实例
+            shard_db = TariffDB(db_path=self.output_db)
+            print(f"✅ 使用独立数据库: {self.output_db}")
 
             scraper = TariffScraper()
+            # 替换为分片数据库
+            scraper.db = shard_db
+            # 清空现有编码缓存（因为我们要爬取新的数据）
+            scraper.existing_codes = set()
+
             total_urls = 0
             completed_urls = []
 
@@ -169,10 +179,98 @@ class ShardExecutor:
         Returns:
             List[str]: 处理的 URL 列表
         """
-        # 这里应该调用实际的爬虫逻辑
-        # 暂时返回模拟数据
-        await asyncio.sleep(0.1)  # 模拟网络延迟
-        return [f"https://example.com/chapter/{chapter}"]
+        from bs4 import BeautifulSoup
+        import logging
+
+        logger = logging.getLogger(__name__)
+        processed_urls = []
+
+        try:
+            # 1. 构建章节URL
+            chapter_url = f"{scraper.base_url}/chapters/{chapter}"
+            logger.info(f"正在爬取章节: {chapter_url}")
+
+            # 2. 爬取章节页面
+            results = await scraper.scrape_with_retry([chapter_url])
+            status, content = results[0]
+
+            if status != 200 or not content:
+                logger.warning(f"章节 {chapter} 页面失败 (status={status})")
+                return []
+
+            # 3. 解析heading链接
+            soup = BeautifulSoup(content, 'html.parser')
+            heading_urls = []
+
+            # 查找heading表格
+            heading_table = soup.find('table', class_='govuk-table')
+            if heading_table:
+                for row in heading_table.find_all('tr', class_='govuk-table__row'):
+                    link = row.find('a')
+                    if link and link.get('href'):
+                        href = link.get('href')
+                        if href.startswith('/headings/'):
+                            full_url = f"{scraper.base_url}{href}"
+                            heading_urls.append(full_url)
+
+            logger.info(f"章节 {chapter} 找到 {len(heading_urls)} 个heading")
+
+            # 4. 分批爬取heading页面并解析commodity链接
+            batch_size = 20
+            for i in range(0, len(heading_urls), batch_size):
+                heading_batch = heading_urls[i:i + batch_size]
+
+                heading_results = await scraper.scrape_with_retry(heading_batch)
+                commodity_urls = []
+
+                for h_status, h_content in heading_results:
+                    if h_status == 200 and h_content:
+                        h_soup = BeautifulSoup(h_content, 'html.parser')
+                        # 查找commodity链接
+                        for row in h_soup.find_all('tr', class_='govuk-table__row'):
+                            link = row.find('a')
+                            if link and link.get('href'):
+                                href = link.get('href')
+                                if href.startswith('/commodities/'):
+                                    full_url = f"{scraper.base_url}{href}"
+                                    commodity_urls.append(full_url)
+
+                logger.info(f"  Heading批次 {i//batch_size + 1}: 找到 {len(commodity_urls)} 个commodity")
+
+                # 5. 分批爬取commodity页面并解析保存
+                for j in range(0, len(commodity_urls), batch_size):
+                    commodity_batch = commodity_urls[j:j + batch_size]
+
+                    commodity_results = await scraper.scrape_with_retry(commodity_batch)
+
+                    for k, (c_status, c_content) in enumerate(commodity_results):
+                        if c_status == 200 and c_content:
+                            # 解析commodity页面并保存到数据库
+                            tariff = scraper.parse_commodity_page(
+                                c_content,
+                                url=commodity_batch[k]
+                            )
+                            if tariff:
+                                scraper.db.save_tariff(tariff)
+                                processed_urls.append(commodity_batch[k])
+                        elif c_status == 404:
+                            # 404 - 标记删除
+                            import re
+                            code_match = re.search(r'/commodities/(\d+)', commodity_batch[k])
+                            if code_match:
+                                code = code_match.group(1)
+                                scraper.db.mark_as_deleted(code)
+                                logger.info(f"  Commodity {code} 已删除 (404)")
+
+                logger.info(f"  Commodity批次完成，本批处理了 {len(commodity_urls)} 个URL")
+
+            return processed_urls
+
+        except Exception as e:
+            logger.error(f"爬取章节 {chapter} 失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
 
     def _save_results(self):
         """保存结果到文件"""
