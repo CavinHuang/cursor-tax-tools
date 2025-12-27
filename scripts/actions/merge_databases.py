@@ -153,12 +153,13 @@ class DatabaseMerger:
         ).fetchone()[0]
         self.stats["total_shard_records"] = total_shard_records
 
-        # 计算去重的记录数（基于实际合并的记录数）
-        if total_shard_records > 0:
+        # 计算去重的记录数（仅当有成功合并时）
+        if self.stats["successful_shards"] > 0:
             self.stats["duplicate_records_removed"] = (
                 total_shard_records - self.stats["total_records"]
             )
         else:
+            # 没有成功合并任何分片，去重记录数设为0
             self.stats["duplicate_records_removed"] = 0
 
         self.stats["merge_time_seconds"] = time.time() - start_time
@@ -170,9 +171,16 @@ class DatabaseMerger:
         print(f"   总分片数: {self.stats['total_shards']}")
         print(f"   成功合并: {self.stats['successful_shards']}")
         print(f"   失败跳过: {self.stats['failed_shards']}")
-        print(f"   总记录数: {self.stats['total_records']:,}")
-        print(f"   分片记录总计: {self.stats['total_shard_records']:,}")
-        print(f"   去重记录: {self.stats['duplicate_records_removed']:,}")
+
+        # 仅当有成功合并时显示详细统计
+        if self.stats["successful_shards"] > 0:
+            print(f"   总记录数: {self.stats['total_records']:,}")
+            print(f"   分片记录总计: {self.stats['total_shard_records']:,}")
+            print(f"   去重记录: {self.stats['duplicate_records_removed']:,}")
+        else:
+            print(f"   ⚠️  所有分片合并失败，使用现有数据库")
+            print(f"   现有记录数: {self.stats['total_records']:,}")
+
         print(f"   耗时: {self.stats['merge_time_seconds']:.2f} 秒")
 
         return self.stats

@@ -164,11 +164,12 @@ class ShardExecutor:
         # 打印结果摘要
         self._print_summary()
 
-        # 🔧 重要：复制数据库到当前目录以便上传 artifact
-        self._copy_db_to_current_dir()
-
         # 🔧 关闭数据库连接以释放文件锁
         self._close_database()
+
+        # 🔧 重要：复制数据库到当前目录以便上传 artifact
+        # 必须在关闭连接后才能复制，否则会遇到 "database is locked" 错误
+        self._copy_db_to_current_dir()
 
         return self.results
 
@@ -296,16 +297,13 @@ class ShardExecutor:
         """复制数据库到当前目录以便上传 artifact"""
         import shutil
         import os
+        import time
 
         try:
             # TariffDB 将数据库保存在用户目录
             # 例如：/home/runner/.uk-tax-tools/tariffs_shard_0.db
             # 我们需要复制到当前目录以便上传 artifact
             target_filename = f"tariffs_{self.shard_id}.db"
-
-            # shard_db 是 TariffDB 实例，它的 db_path 属性包含实际路径
-            # 但是我们在 execute 方法中创建的 shard_db 变量不在这里
-            # 让我们直接从已知的位置复制
 
             # 构建可能的源路径
             if os.name == 'nt':  # Windows
@@ -318,17 +316,35 @@ class ShardExecutor:
             source_path = os.path.join(source_dir, target_filename)
 
             if os.path.exists(source_path):
-                # 复制到当前目录
-                shutil.copy2(source_path, target_filename)
-                print(f"✅ 数据库已复制到当前目录: {target_filename}")
+                # 等待文件系统同步（确保数据库完全写入磁盘）
+                time.sleep(0.5)
 
-                # 显示文件大小
-                file_size = os.path.getsize(target_filename)
-                size_mb = file_size / (1024 * 1024)
-                print(f"   文件大小: {size_mb:.2f} MB")
+                # 删除目标文件（如果存在）
+                if os.path.exists(target_filename):
+                    os.remove(target_filename)
+
+                # 使用 shutil.copy() 而不是 copy2() 以减少元数据操作
+                # 在 GitHub Actions 环境中更可靠
+                shutil.copy(source_path, target_filename)
+
+                # 再次等待确保复制完成
+                time.sleep(0.2)
+
+                # 验证复制成功
+                if os.path.exists(target_filename):
+                    file_size = os.path.getsize(target_filename)
+                    size_mb = file_size / (1024 * 1024)
+                    print(f"✅ 数据库已复制到当前目录: {target_filename}")
+                    print(f"   文件大小: {size_mb:.2f} MB ({file_size:,} 字节)")
+                else:
+                    print(f"❌ 复制验证失败: 目标文件不存在")
             else:
                 print(f"⚠️  数据库文件不存在: {source_path}")
 
+        except PermissionError as e:
+            print(f"❌ 权限错误，数据库可能仍被锁定: {e}")
+            import traceback
+            traceback.print_exc()
         except Exception as e:
             print(f"⚠️  复制数据库失败: {e}")
             import traceback
@@ -358,14 +374,33 @@ class ShardExecutor:
                 # TariffDB 使用 threading.local() 管理连接
                 # 需要访问 _local.conn 来关闭连接
                 if hasattr(self.shard_db, '_local') and hasattr(self.shard_db._local, 'conn'):
-                    self.shard_db._local.conn.close()
-                    # 删除连接引用，防止后续访问
+                    conn = self.shard_db._local.conn
+
+                    # 1. 提交所有未提交的事务
+                    try:
+                        conn.commit()
+                    except:
+                        pass  # 忽略提交错误
+
+                    # 2. 执行清理操作
+                    try:
+                        conn.execute("PRAGMA optimize")
+                    except:
+                        pass  # 忽略优化错误
+
+                    # 3. 关闭连接
+                    conn.close()
+
+                    # 4. 删除连接引用，防止后续访问
                     delattr(self.shard_db._local, 'conn')
                     print(f"✅ 数据库连接已关闭")
 
-                # 强制垃圾回收以释放任何残留引用
+                # 5. 强制垃圾回收以释放任何残留引用
                 import gc
                 gc.collect()
+
+                # 6. 删除数据库对象引用
+                self.shard_db = None
 
             except Exception as e:
                 print(f"⚠️  关闭数据库连接失败: {e}")
