@@ -37,6 +37,7 @@ class DatabaseMerger:
             "successful_shards": 0,
             "failed_shards": 0,
             "total_records": 0,
+            "total_shard_records": 0,  # 新增：所有分片的记录总数
             "duplicate_records_removed": 0,
             "merge_time_seconds": 0,
             "shard_details": []
@@ -79,9 +80,24 @@ class DatabaseMerger:
         main_cursor = main_conn.cursor()
 
         # 合并每个分片
+        total_shard_records = 0  # 追踪所有分片的记录总数
+
         for i, shard_path in enumerate(shard_paths):
             if not os.path.exists(shard_path):
                 print(f"⚠️  分片不存在: {shard_path}")
+                self.stats["failed_shards"] += 1
+                continue
+
+            # 获取分片记录数（即使合并失败也要统计）
+            try:
+                temp_conn = sqlite3.connect(shard_path)
+                shard_count = temp_conn.execute(
+                    "SELECT COUNT(*) FROM tariffs"
+                ).fetchone()[0]
+                temp_conn.close()
+                total_shard_records += shard_count
+            except Exception as e:
+                print(f"⚠️  无法读取分片记录数 ({shard_path}): {e}")
                 self.stats["failed_shards"] += 1
                 continue
 
@@ -91,11 +107,6 @@ class DatabaseMerger:
                 main_cursor.execute(
                     f"ATTACH DATABASE '{shard_path}' AS {shard_db_name}"
                 )
-
-                # 获取分片记录数
-                shard_count = main_cursor.execute(
-                    f"SELECT COUNT(*) FROM {shard_db_name}.tariffs"
-                ).fetchone()[0]
 
                 # 合并数据（使用 INSERT OR IGNORE 去重）
                 main_cursor.execute(f"""
@@ -123,6 +134,13 @@ class DatabaseMerger:
             except Exception as e:
                 print(f"❌ 合并分片失败 ({shard_path}): {e}")
                 self.stats["failed_shards"] += 1
+                # 即使失败，也要记录分片信息用于统计
+                self.stats["shard_details"].append({
+                    "shard_path": shard_path,
+                    "shard_records": shard_count,
+                    "added_records": 0,
+                    "error": str(e)
+                })
                 continue
 
         # 提交事务
@@ -133,15 +151,15 @@ class DatabaseMerger:
         self.stats["total_records"] = main_cursor.execute(
             "SELECT COUNT(*) FROM tariffs"
         ).fetchone()[0]
+        self.stats["total_shard_records"] = total_shard_records
 
-        # 计算去重的记录数
-        total_shard_records = sum(
-            detail["shard_records"]
-            for detail in self.stats["shard_details"]
-        )
-        self.stats["duplicate_records_removed"] = (
-            total_shard_records - self.stats["total_records"]
-        )
+        # 计算去重的记录数（基于实际合并的记录数）
+        if total_shard_records > 0:
+            self.stats["duplicate_records_removed"] = (
+                total_shard_records - self.stats["total_records"]
+            )
+        else:
+            self.stats["duplicate_records_removed"] = 0
 
         self.stats["merge_time_seconds"] = time.time() - start_time
 
@@ -149,7 +167,11 @@ class DatabaseMerger:
         main_conn.close()
 
         print(f"\n✅ 合并完成!")
+        print(f"   总分片数: {self.stats['total_shards']}")
+        print(f"   成功合并: {self.stats['successful_shards']}")
+        print(f"   失败跳过: {self.stats['failed_shards']}")
         print(f"   总记录数: {self.stats['total_records']:,}")
+        print(f"   分片记录总计: {self.stats['total_shard_records']:,}")
         print(f"   去重记录: {self.stats['duplicate_records_removed']:,}")
         print(f"   耗时: {self.stats['merge_time_seconds']:.2f} 秒")
 

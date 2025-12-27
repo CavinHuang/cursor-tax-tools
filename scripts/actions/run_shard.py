@@ -355,13 +355,22 @@ class ShardExecutor:
         """关闭数据库连接以释放文件锁"""
         if self.shard_db:
             try:
-                # 强制垃圾回收以释放连接
+                # TariffDB 使用 threading.local() 管理连接
+                # 需要访问 _local.conn 来关闭连接
+                if hasattr(self.shard_db, '_local') and hasattr(self.shard_db._local, 'conn'):
+                    self.shard_db._local.conn.close()
+                    # 删除连接引用，防止后续访问
+                    delattr(self.shard_db._local, 'conn')
+                    print(f"✅ 数据库连接已关闭")
+
+                # 强制垃圾回收以释放任何残留引用
                 import gc
                 gc.collect()
 
-                print(f"✅ 数据库连接已关闭")
             except Exception as e:
                 print(f"⚠️  关闭数据库连接失败: {e}")
+                import traceback
+                traceback.print_exc()
 
 
 def main():
