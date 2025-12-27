@@ -185,6 +185,7 @@ jobs:
           tariffs_shard_${{ matrix.shard }}.db
           shard_${{ matrix.shard }}_results.json
           shard_${{ matrix.shard }}_progress.json
+          debug_*.html
         retention-days: 7
         if-no-files-found: warn
 
