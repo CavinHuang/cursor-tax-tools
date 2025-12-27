@@ -177,14 +177,16 @@ class DatabaseMerger:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
 
-        # 创建 tariffs 表
+        # 创建 tariffs 表（与 tariff_db.py 保持一致）
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS tariffs (
-                commodity_code TEXT PRIMARY KEY,
+                code TEXT PRIMARY KEY,
                 description TEXT,
                 rate TEXT,
-                north_ireland_rate TEXT,
                 url TEXT,
+                north_ireland_rate TEXT,
+                north_ireland_url TEXT,
+                other_rate TEXT,
                 last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -323,7 +325,7 @@ class DatabaseMerger:
 
             # 检查重复
             duplicates = cursor.execute("""
-                SELECT COUNT(*) - COUNT(DISTINCT commodity_code)
+                SELECT COUNT(*) - COUNT(DISTINCT code)
                 FROM tariffs
             """).fetchone()[0]
 

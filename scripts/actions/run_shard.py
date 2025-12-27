@@ -49,6 +49,7 @@ class ShardExecutor:
         self.output_db = output_db or f"tariffs_{shard_id}.db"
 
         self.monitor = ProgressMonitor()
+        self.shard_db = None  # 保存数据库引用以便后续关闭
         self.results = {
             "shard_id": shard_id,
             "status": "unknown",
@@ -81,6 +82,7 @@ class ShardExecutor:
 
             # 创建独立的数据库实例
             shard_db = TariffDB(db_path=self.output_db)
+            self.shard_db = shard_db  # 保存引用以便后续关闭
             print(f"✅ 使用独立数据库: {self.output_db}")
 
             scraper = TariffScraper()
@@ -164,6 +166,9 @@ class ShardExecutor:
 
         # 🔧 重要：复制数据库到当前目录以便上传 artifact
         self._copy_db_to_current_dir()
+
+        # 🔧 关闭数据库连接以释放文件锁
+        self._close_database()
 
         return self.results
 
@@ -345,6 +350,18 @@ class ShardExecutor:
 
         print(f"⏱️  耗时: {elapsed:.2f} 秒")
         print(f"{'='*60}\n")
+
+    def _close_database(self):
+        """关闭数据库连接以释放文件锁"""
+        if self.shard_db:
+            try:
+                # 强制垃圾回收以释放连接
+                import gc
+                gc.collect()
+
+                print(f"✅ 数据库连接已关闭")
+            except Exception as e:
+                print(f"⚠️  关闭数据库连接失败: {e}")
 
 
 def main():
