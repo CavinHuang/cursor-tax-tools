@@ -224,6 +224,23 @@ class DatabaseMerger:
         """
         shard_files = []
 
+        # DEBUG: 打印输入目录的内容
+        print(f"🔍 搜索目录: {input_dir}")
+        print(f"🔍 搜索模式: {pattern}")
+        print(f"🔍 递归搜索: {recursive}")
+
+        if os.path.exists(input_dir):
+            print(f"📂 目录内容:")
+            for root, dirs, files in os.walk(input_dir):
+                level = root.replace(input_dir, '').count(os.sep)
+                indent = ' ' * 2 * level
+                print(f'{indent}{os.path.basename(root)}/')
+                subindent = ' ' * 2 * (level + 1)
+                for file in files:
+                    print(f'{subindent}{file}')
+        else:
+            print(f"❌ 目录不存在: {input_dir}")
+
         if recursive:
             # 递归搜索所有子目录
             for root, dirs, files in os.walk(input_dir):
