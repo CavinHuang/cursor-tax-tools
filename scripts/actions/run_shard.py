@@ -198,21 +198,8 @@ class ShardExecutor:
                 logger.warning(f"章节 {chapter} 页面失败 (status={status})")
                 return []
 
-            # 3. 解析heading链接
-            soup = BeautifulSoup(content, 'html.parser')
-            heading_urls = []
-
-            # 查找heading表格
-            heading_table = soup.find('table', class_='govuk-table')
-            if heading_table:
-                for row in heading_table.find_all('tr', class_='govuk-table__row'):
-                    link = row.find('a')
-                    if link and link.get('href'):
-                        href = link.get('href')
-                        if href.startswith('/headings/'):
-                            full_url = f"{scraper.base_url}{href}"
-                            heading_urls.append(full_url)
-
+            # 3. 解析heading链接（使用scraper的现有方法）
+            heading_urls = scraper.parse_heading_links(content)
             logger.info(f"章节 {chapter} 找到 {len(heading_urls)} 个heading")
 
             # 4. 分批爬取heading页面并解析commodity链接
@@ -225,8 +212,6 @@ class ShardExecutor:
 
                 for idx, (h_status, h_content) in enumerate(heading_results):
                     if h_status == 200 and h_content:
-                        h_soup = BeautifulSoup(h_content, 'html.parser')
-
                         # DEBUG: 保存第一个 heading 页面用于调试
                         if i == 0 and idx == 0:
                             debug_file = f"debug_heading_{chapter}.html"
@@ -237,16 +222,11 @@ class ShardExecutor:
                             except:
                                 pass
 
-                        # 尝试多种方式查找 commodity 链接
-                        # 方法1: 查找所有 /commodities/ 链接
-                        for link in h_soup.find_all('a', href=True):
-                            href = link.get('href')
-                            if href and '/commodities/' in href:
-                                full_url = f"{scraper.base_url}{href}" if href.startswith('/') else href
-                                if full_url not in commodity_urls:
-                                    commodity_urls.append(full_url)
+                        # 使用scraper的parse_commodity_links方法
+                        heading_commodities = scraper.parse_commodity_links(h_content)
+                        commodity_urls.extend(heading_commodities)
 
-                        logger.info(f"    Heading {idx+1}: 找到 {len(commodity_urls)} 个 commodity (累计)")
+                        logger.info(f"    Heading {idx+1}: 找到 {len(heading_commodities)} 个 commodity")
                     else:
                         logger.warning(f"    Heading {idx+1} 失败 (status={h_status})")
 
