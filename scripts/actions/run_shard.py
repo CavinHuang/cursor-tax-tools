@@ -246,7 +246,13 @@ class ShardExecutor:
                                 url=commodity_batch[k]
                             )
                             if tariff:
-                                scraper.db.save_tariff(tariff)
+                                scraper.db.add_tariff(
+                                    code=tariff['code'],
+                                    description=tariff['description'],
+                                    rate=tariff['rate'],
+                                    url=tariff.get('url'),
+                                    other_rate=tariff.get('other_rate')
+                                )
                                 processed_urls.append(commodity_batch[k])
                         elif c_status == 404:
                             # 404 - 标记删除
@@ -254,7 +260,7 @@ class ShardExecutor:
                             code_match = re.search(r'/commodities/(\d+)', commodity_batch[k])
                             if code_match:
                                 code = code_match.group(1)
-                                scraper.db.mark_as_deleted(code)
+                                scraper.db.delete_tariff(code)
                                 logger.info(f"  Commodity {code} 已删除 (404)")
 
                 logger.info(f"  Commodity批次完成，本批处理了 {len(commodity_urls)} 个URL")
