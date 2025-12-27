@@ -101,13 +101,7 @@ jobs:
             --output test_task_assignment.json
 
           # 手动限制为前5章
-          cat > task_assignment.json << EOF
-          {
-            "shard_0": ["01"],
-            "shard_1": ["02"],
-            "shard_2": ["03"]
-          }
-          EOF
+          echo '{"shard_0":["01"],"shard_1":["02"],"shard_2":["03"]}' > task_assignment.json
         else
           echo "INFO: 正常模式 - 爬取所有章节"
           python scripts/actions/chapter_scheduler.py \
@@ -318,7 +312,7 @@ jobs:
 
     - name: 创建更新报告
       run: |
-        cat > UPDATE_REPORT.md << EOF
+        cat > UPDATE_REPORT.md << 'EOF'
         # 关税数据更新报告
 
         **更新时间**: $(date -u +'%Y-%m-%d %H:%M UTC')
