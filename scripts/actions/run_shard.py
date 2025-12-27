@@ -217,7 +217,7 @@ def main():
     parser.add_argument(
         "--chapters",
         type=str,
-        required=True,
+        required=False,
         help="章节列表（JSON 数组格式或逗号分隔）"
     )
     parser.add_argument(
@@ -246,12 +246,16 @@ def main():
         with open(args.task_file, 'r') as f:
             task_assignment = json.load(f)
         chapters = task_assignment.get(args.shard_id, [])
-    elif args.chapters.startswith("["):
-        # JSON 格式
-        chapters = json.loads(args.chapters)
+    elif args.chapters:
+        if args.chapters.startswith("["):
+            # JSON 格式
+            chapters = json.loads(args.chapters)
+        else:
+            # 逗号分隔
+            chapters = args.chapters.split(",")
     else:
-        # 逗号分隔
-        chapters = args.chapters.split(",")
+        print(f"❌ 必须提供 --chapters 或 --task-file 参数")
+        sys.exit(1)
 
     if not chapters:
         print(f"❌ 没有分配章节给 {args.shard_id}")
