@@ -162,6 +162,9 @@ class ShardExecutor:
         # 打印结果摘要
         self._print_summary()
 
+        # 🔧 重要：复制数据库到当前目录以便上传 artifact
+        self._copy_db_to_current_dir()
+
         return self.results
 
     async def _scrape_chapter(
@@ -283,6 +286,48 @@ class ShardExecutor:
             print(f"💾 结果已保存: {result_file}")
         except Exception as e:
             print(f"⚠️  保存结果失败: {e}")
+
+    def _copy_db_to_current_dir(self):
+        """复制数据库到当前目录以便上传 artifact"""
+        import shutil
+        import os
+
+        try:
+            # TariffDB 将数据库保存在用户目录
+            # 例如：/home/runner/.uk-tax-tools/tariffs_shard_0.db
+            # 我们需要复制到当前目录以便上传 artifact
+            target_filename = f"tariffs_{self.shard_id}.db"
+
+            # shard_db 是 TariffDB 实例，它的 db_path 属性包含实际路径
+            # 但是我们在 execute 方法中创建的 shard_db 变量不在这里
+            # 让我们直接从已知的位置复制
+
+            # 构建可能的源路径
+            if os.name == 'nt':  # Windows
+                user_dir = os.path.expanduser("~")
+                source_dir = os.path.join(user_dir, "uk-tax-tools")
+            else:  # macOS/Linux
+                user_dir = os.path.expanduser("~")
+                source_dir = os.path.join(user_dir, ".uk-tax-tools")
+
+            source_path = os.path.join(source_dir, target_filename)
+
+            if os.path.exists(source_path):
+                # 复制到当前目录
+                shutil.copy2(source_path, target_filename)
+                print(f"✅ 数据库已复制到当前目录: {target_filename}")
+
+                # 显示文件大小
+                file_size = os.path.getsize(target_filename)
+                size_mb = file_size / (1024 * 1024)
+                print(f"   文件大小: {size_mb:.2f} MB")
+            else:
+                print(f"⚠️  数据库文件不存在: {source_path}")
+
+        except Exception as e:
+            print(f"⚠️  复制数据库失败: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _print_summary(self):
         """打印执行摘要"""
