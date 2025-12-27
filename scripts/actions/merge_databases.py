@@ -208,7 +208,8 @@ class DatabaseMerger:
     def discover_shard_databases(
         self,
         input_dir: str = "artifacts",
-        pattern: str = "tariffs_shard_*.db"
+        pattern: str = "tariffs_shard_*.db",
+        recursive: bool = True
     ) -> List[str]:
         """
         自动发现分片数据库文件
@@ -216,12 +217,28 @@ class DatabaseMerger:
         Args:
             input_dir: 搜索目录
             pattern: 文件匹配模式
+            recursive: 是否递归搜索子目录
 
         Returns:
             List[str]: 分片数据库路径列表（按 shard 编号排序）
         """
-        search_pattern = os.path.join(input_dir, pattern)
-        shard_files = glob.glob(search_pattern)
+        shard_files = []
+
+        if recursive:
+            # 递归搜索所有子目录
+            for root, dirs, files in os.walk(input_dir):
+                # 使用 fnmatch 过滤文件名
+                import fnmatch
+                matched_files = [
+                    os.path.join(root, f)
+                    for f in files
+                    if fnmatch.fnmatch(f, pattern)
+                ]
+                shard_files.extend(matched_files)
+        else:
+            # 只搜索顶层目录
+            search_pattern = os.path.join(input_dir, pattern)
+            shard_files = glob.glob(search_pattern)
 
         # 按 shard 编号排序
         shard_files.sort(key=lambda x: self._extract_shard_number(x))
