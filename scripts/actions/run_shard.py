@@ -391,8 +391,9 @@ class ShardExecutor:
                     except:
                         pass  # 忽略提交错误
 
-                    # 2. 执行清理操作
+                    # 2. 执行 WAL checkpoint 将所有更改刷新到主数据库
                     try:
+                        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                         conn.execute("PRAGMA optimize")
                     except:
                         pass  # 忽略优化错误
@@ -410,6 +411,31 @@ class ShardExecutor:
 
                 # 6. 删除数据库对象引用
                 self.shard_db = None
+
+                # 7. 显式删除 WAL 文件以释放文件锁
+                import os
+                # 构建数据库文件路径
+                if os.name == 'nt':  # Windows
+                    user_dir = os.path.expanduser("~")
+                    db_dir = os.path.join(user_dir, "uk-tax-tools")
+                else:  # macOS/Linux
+                    user_dir = os.path.expanduser("~")
+                    db_dir = os.path.join(user_dir, ".uk-tax-tools")
+
+                db_filename = f"tariffs_{self.shard_id}.db"
+                db_path = os.path.join(db_dir, db_filename)
+
+                # 删除 WAL 和 SHM 文件
+                wal_file = f"{db_path}-wal"
+                shm_file = f"{db_path}-shm"
+
+                for f in [wal_file, shm_file]:
+                    if os.path.exists(f):
+                        try:
+                            os.remove(f)
+                            print(f"✅ 已删除 WAL 文件: {os.path.basename(f)}")
+                        except Exception as e:
+                            print(f"⚠️  删除 WAL 文件失败 ({os.path.basename(f)}): {e}")
 
             except Exception as e:
                 print(f"⚠️  关闭数据库连接失败: {e}")
