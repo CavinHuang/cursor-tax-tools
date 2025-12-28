@@ -85,6 +85,15 @@ class ShardExecutor:
             self.shard_db = shard_db  # 保存引用以便后续关闭
             print(f"✅ 使用独立数据库: {self.output_db}")
 
+            # 🔧 启用 WAL 模式以允许更好的并发读取
+            # 这样在合并时不会被锁定
+            try:
+                shard_db.conn.execute("PRAGMA journal_mode=WAL")
+                shard_db.conn.execute("PRAGMA synchronous=NORMAL")
+                print(f"✅ 已启用 WAL 模式")
+            except Exception as e:
+                print(f"⚠️  启用 WAL 模式失败: {e}")
+
             scraper = TariffScraper()
             # 替换为分片数据库
             scraper.db = shard_db
