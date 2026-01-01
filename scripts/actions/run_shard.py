@@ -256,6 +256,9 @@ class ShardExecutor:
 
                     commodity_results = await scraper.scrape_with_retry(commodity_batch)
 
+                    # 收集需要更新北爱尔兰数据的商品
+                    ni_updates = []
+
                     for k, (c_status, c_content) in enumerate(commodity_results):
                         if c_status == 200 and c_content:
                             # 解析commodity页面并保存到数据库
@@ -272,6 +275,8 @@ class ShardExecutor:
                                     other_rate=tariff.get('other_rate')
                                 )
                                 processed_urls.append(commodity_batch[k])
+                                # 记录需要更新北爱尔兰数据的商品
+                                ni_updates.append(tariff['code'])
                         elif c_status == 404:
                             # 404 - 标记删除
                             import re
@@ -280,6 +285,32 @@ class ShardExecutor:
                                 code = code_match.group(1)
                                 scraper.db.delete_tariff(code)
                                 logger.info(f"  Commodity {code} 已删除 (404)")
+
+                    # 6. 批量爬取北爱尔兰数据
+                    if ni_updates:
+                        ni_urls = [
+                            f"https://www.trade-tariff.service.gov.uk/xi/commodities/{code}"
+                            for code in ni_updates
+                        ]
+                        ni_results = await scraper.scrape_with_retry(ni_urls)
+
+                        ni_success_count = 0
+                        for ni_idx, (ni_status, ni_content) in enumerate(ni_results):
+                            if ni_status == 200 and ni_content:
+                                ni_tariff = scraper.parse_commodity_page(
+                                    ni_content,
+                                    url=ni_urls[ni_idx]
+                                )
+                                if ni_tariff and ni_tariff.get('rate'):
+                                    code = ni_updates[ni_idx]
+                                    scraper.db.update_north_ireland_tariff(
+                                        code=code,
+                                        north_ireland_rate=ni_tariff['rate'],
+                                        north_ireland_url=ni_urls[ni_idx]
+                                    )
+                                    ni_success_count += 1
+
+                        logger.info(f"    北爱尔兰数据更新: {ni_success_count}/{len(ni_updates)}")
 
                 logger.info(f"  Commodity批次完成，本批处理了 {len(commodity_urls)} 个URL")
 
