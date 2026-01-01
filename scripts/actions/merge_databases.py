@@ -104,14 +104,19 @@ class DatabaseMerger:
                     )
                     shard_cursor = shard_conn.cursor()
 
+                    # 获取分片的列结构
+                    shard_cursor.execute("PRAGMA table_info(tariffs)")
+                    shard_columns = [row[1] for row in shard_cursor.fetchall()]
+
                     # 获取分片记录数
                     shard_count = shard_cursor.execute(
                         "SELECT COUNT(*) FROM tariffs"
                     ).fetchone()[0]
                     total_shard_records += shard_count
 
-                    # 读取所有记录
-                    shard_cursor.execute("SELECT * FROM tariffs")
+                    # 按列名读取所有记录
+                    columns_str = ", ".join(shard_columns)
+                    shard_cursor.execute(f"SELECT {columns_str} FROM tariffs")
                     records = shard_cursor.fetchall()
 
                     # 关闭分片连接
@@ -122,13 +127,13 @@ class DatabaseMerger:
                         "SELECT COUNT(*) FROM tariffs"
                     ).fetchone()[0]
 
-                    # 批量写入主数据库
-                    main_cursor.executemany("""
-                        INSERT OR IGNORE INTO tariffs
-                        (code, description, rate, url, north_ireland_rate,
-                         north_ireland_url, other_rate, last_updated)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, records)
+                    # 动态构建 INSERT 语句（只使用分片中存在的列）
+                    placeholders = ", ".join(["?"] * len(shard_columns))
+                    insert_sql = f"""
+                        INSERT OR IGNORE INTO tariffs ({columns_str})
+                        VALUES ({placeholders})
+                    """
+                    main_cursor.executemany(insert_sql, records)
                     main_conn.commit()
 
                     # 计算实际新增记录数
@@ -230,7 +235,7 @@ class DatabaseMerger:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
 
-        # 创建 tariffs 表（与 tariff_db.py 保持一致）
+        # 创建 tariffs 表（与 tariff_db.py 保持一致，不含 last_updated）
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS tariffs (
                 code TEXT PRIMARY KEY,
@@ -239,8 +244,7 @@ class DatabaseMerger:
                 url TEXT,
                 north_ireland_rate TEXT,
                 north_ireland_url TEXT,
-                other_rate TEXT,
-                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                other_rate TEXT
             )
         """)
 
