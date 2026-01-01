@@ -128,9 +128,10 @@ class DatabaseMerger:
                 merge_success = False
 
                 for attempt in range(max_retries):
+                    # 每次重试使用唯一别名，避免 "is already in use" 错误
+                    shard_db_name = f"shard_db_{i}_attempt_{attempt}"
                     try:
                         # 附加分片数据库（使用临时副本）
-                        shard_db_name = f"shard_db_{i}"
                         main_cursor.execute(
                             f"ATTACH DATABASE '{temp_path}' AS {shard_db_name}"
                         )
@@ -162,18 +163,15 @@ class DatabaseMerger:
                         break  # 成功，跳出重试循环
 
                     except Exception as e:
+                        # 无论成功失败，都尝试清理已附加的数据库
+                        self._safe_detach(main_cursor, shard_db_name)
+
                         if attempt < max_retries - 1:
                             # 等待后重试
                             wait_time = (attempt + 1) * 2  # 2秒, 4秒, 6秒
                             print(f"⏳ 分片 {i+1} 合并失败 (尝试 {attempt+1}/{max_retries}): {e}")
                             print(f"   等待 {wait_time} 秒后重试...")
                             time.sleep(wait_time)
-
-                            # 尝试分离可能残留的连接
-                            try:
-                                main_cursor.execute(f"DETACH DATABASE IF EXISTS {shard_db_name}")
-                            except:
-                                pass
                         else:
                             # 最后一次尝试也失败了
                             print(f"❌ 合并分片失败 ({original_path}): {e}")
@@ -241,6 +239,25 @@ class DatabaseMerger:
         print(f"   耗时: {self.stats['merge_time_seconds']:.2f} 秒")
 
         return self.stats
+
+    def _safe_detach(self, cursor, db_name: str):
+        """
+        安全地分离已附加的数据库
+
+        Args:
+            cursor: 数据库游标
+            db_name: 附加的数据库别名
+        """
+        try:
+            # 检查数据库是否已附加
+            cursor.execute("PRAGMA database_list")
+            attached_dbs = [row[1] for row in cursor.fetchall()]
+
+            if db_name in attached_dbs:
+                cursor.execute(f"DETACH DATABASE {db_name}")
+        except Exception as e:
+            # 忽略分离错误，但记录日志
+            print(f"   ⚠️ 清理数据库 {db_name} 时出错: {e}")
 
     def _initialize_main_database(self, db_path: str):
         """
