@@ -51,12 +51,11 @@ class DatabaseMerger:
         """
         合并多个 shard 数据库
 
-        合并策略：
+        合并策略（不使用 ATTACH DATABASE，避免锁定问题）：
         1. 创建主数据库（如果不存在）
-        2. 将分片数据库复制到临时位置以避免锁定冲突
-        3. 使用 ATTACH DATABASE 连接所有分片
-        4. 使用 INSERT OR IGNORE 去重（基于 commodity_code 主键）
-        5. 记录每个分片的统计信息
+        2. 对每个分片：独立连接读取数据，然后批量写入主数据库
+        3. 使用 INSERT OR IGNORE 去重（基于 commodity_code 主键）
+        4. 记录每个分片的统计信息
 
         Args:
             shard_paths: 分片数据库路径列表
@@ -66,168 +65,137 @@ class DatabaseMerger:
             dict: 合并统计信息
         """
         import time
-        import shutil
-        import tempfile
         start_time = time.time()
 
         if output_path is None:
             output_path = self.main_db_path
 
         print(f"🔧 开始合并 {len(shard_paths)} 个分片数据库...")
+        print(f"📝 使用直接读取+写入模式（避免 ATTACH DATABASE 锁定问题）")
 
         # 初始化主数据库
         self._initialize_main_database(output_path)
 
-        # 创建临时目录用于复制的分片数据库
-        temp_dir = tempfile.mkdtemp(prefix="shard_merge_")
-        print(f"📁 创建临时目录: {temp_dir}")
+        # 连接主数据库
+        main_conn = sqlite3.connect(output_path, timeout=60.0)
+        main_conn.execute("PRAGMA journal_mode=WAL")  # 使用 WAL 模式提高并发性能
+        main_cursor = main_conn.cursor()
 
-        try:
-            # 复制所有分片数据库到临时位置
-            temp_shard_paths = []
-            for i, shard_path in enumerate(shard_paths):
-                if not os.path.exists(shard_path):
-                    print(f"⚠️  分片不存在: {shard_path}")
-                    self.stats["failed_shards"] += 1
-                    continue
+        # 合并每个分片
+        total_shard_records = 0
 
+        for i, shard_path in enumerate(shard_paths):
+            if not os.path.exists(shard_path):
+                print(f"⚠️  分片不存在: {shard_path}")
+                self.stats["failed_shards"] += 1
+                continue
+
+            # 重试逻辑
+            max_retries = 3
+            merge_success = False
+
+            for attempt in range(max_retries):
                 try:
-                    # 复制数据库文件到临时位置
-                    temp_path = os.path.join(temp_dir, f"shard_{i}.db")
-                    shutil.copy2(shard_path, temp_path)
-                    temp_shard_paths.append((shard_path, temp_path))
-                    print(f"📋 复制分片 {i+1}: {shard_path} -> {temp_path}")
-                except Exception as e:
-                    print(f"⚠️  复制分片失败 ({shard_path}): {e}")
-                    self.stats["failed_shards"] += 1
-                    continue
+                    # 独立连接读取分片数据
+                    shard_conn = sqlite3.connect(
+                        f"file:{shard_path}?mode=ro",  # 只读模式打开
+                        uri=True,
+                        timeout=30.0
+                    )
+                    shard_cursor = shard_conn.cursor()
 
-            # 连接主数据库
-            main_conn = sqlite3.connect(output_path, timeout=30.0)
-            main_cursor = main_conn.cursor()
-
-            # 合并每个分片
-            total_shard_records = 0  # 追踪所有分片的记录总数
-
-            for i, (original_path, temp_path) in enumerate(temp_shard_paths):
-                # 获取分片记录数
-                try:
-                    shard_conn = sqlite3.connect(temp_path, timeout=10.0)
-                    shard_count = shard_conn.execute(
+                    # 获取分片记录数
+                    shard_count = shard_cursor.execute(
                         "SELECT COUNT(*) FROM tariffs"
                     ).fetchone()[0]
-                    shard_conn.close()
                     total_shard_records += shard_count
+
+                    # 读取所有记录
+                    shard_cursor.execute("SELECT * FROM tariffs")
+                    records = shard_cursor.fetchall()
+
+                    # 关闭分片连接
+                    shard_conn.close()
+
+                    # 获取合并前的记录数
+                    before_count = main_cursor.execute(
+                        "SELECT COUNT(*) FROM tariffs"
+                    ).fetchone()[0]
+
+                    # 批量写入主数据库
+                    main_cursor.executemany("""
+                        INSERT OR IGNORE INTO tariffs
+                        (code, description, rate, url, north_ireland_rate,
+                         north_ireland_url, other_rate, last_updated)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, records)
+                    main_conn.commit()
+
+                    # 计算实际新增记录数
+                    after_count = main_cursor.execute(
+                        "SELECT COUNT(*) FROM tariffs"
+                    ).fetchone()[0]
+                    added_records = after_count - before_count
+
+                    # 记录统计
+                    self.stats["successful_shards"] += 1
+                    self.stats["shard_details"].append({
+                        "shard_path": shard_path,
+                        "shard_records": shard_count,
+                        "added_records": added_records
+                    })
+
+                    print(f"✅ 分片 {i+1}/{len(shard_paths)}: "
+                          f"+{added_records} 条记录 (分片总计: {shard_count})")
+
+                    merge_success = True
+                    break
+
                 except Exception as e:
-                    print(f"⚠️  无法读取分片记录数 ({temp_path}): {e}")
-                    self.stats["failed_shards"] += 1
-                    continue
-
-                # 重试逻辑：尝试合并，最多重试3次
-                max_retries = 3
-                merge_success = False
-
-                for attempt in range(max_retries):
-                    # 每次重试使用唯一别名，避免 "is already in use" 错误
-                    shard_db_name = f"shard_db_{i}_attempt_{attempt}"
-                    try:
-                        # 附加分片数据库（使用临时副本）
-                        main_cursor.execute(
-                            f"ATTACH DATABASE '{temp_path}' AS {shard_db_name}"
-                        )
-
-                        # 合并数据（使用 INSERT OR IGNORE 去重）
-                        main_cursor.execute(f"""
-                            INSERT OR IGNORE INTO tariffs
-                            SELECT * FROM {shard_db_name}.tariffs
-                        """)
-
-                        # 获取实际新增记录数
-                        added_records = main_cursor.rowcount
-
-                        # 分离数据库
-                        main_cursor.execute(f"DETACH DATABASE {shard_db_name}")
-
-                        # 记录统计
-                        self.stats["successful_shards"] += 1
+                    if attempt < max_retries - 1:
+                        wait_time = (attempt + 1) * 2
+                        print(f"⏳ 分片 {i+1} 合并失败 (尝试 {attempt+1}/{max_retries}): {e}")
+                        print(f"   等待 {wait_time} 秒后重试...")
+                        time.sleep(wait_time)
+                    else:
+                        print(f"❌ 合并分片失败 ({shard_path}): {e}")
+                        self.stats["failed_shards"] += 1
                         self.stats["shard_details"].append({
-                            "shard_path": original_path,
-                            "shard_records": shard_count,
-                            "added_records": added_records
+                            "shard_path": shard_path,
+                            "shard_records": 0,
+                            "added_records": 0,
+                            "error": str(e),
+                            "retries": max_retries
                         })
 
-                        print(f"✅ 分片 {i+1}/{len(temp_shard_paths)}: "
-                              f"+{added_records} 条记录 (分片总计: {shard_count})")
+            if not merge_success:
+                continue
 
-                        merge_success = True
-                        break  # 成功，跳出重试循环
+        # 收集统计信息
+        self.stats["total_shards"] = len(shard_paths)
+        self.stats["total_records"] = main_cursor.execute(
+            "SELECT COUNT(*) FROM tariffs"
+        ).fetchone()[0]
+        self.stats["total_shard_records"] = total_shard_records
 
-                    except Exception as e:
-                        # 无论成功失败，都尝试清理已附加的数据库
-                        self._safe_detach(main_cursor, shard_db_name)
+        # 计算去重的记录数
+        if self.stats["successful_shards"] > 0:
+            self.stats["duplicate_records_removed"] = (
+                total_shard_records - self.stats["total_records"]
+            )
+        else:
+            self.stats["duplicate_records_removed"] = 0
 
-                        if attempt < max_retries - 1:
-                            # 等待后重试
-                            wait_time = (attempt + 1) * 2  # 2秒, 4秒, 6秒
-                            print(f"⏳ 分片 {i+1} 合并失败 (尝试 {attempt+1}/{max_retries}): {e}")
-                            print(f"   等待 {wait_time} 秒后重试...")
-                            time.sleep(wait_time)
-                        else:
-                            # 最后一次尝试也失败了
-                            print(f"❌ 合并分片失败 ({original_path}): {e}")
-                            self.stats["failed_shards"] += 1
+        self.stats["merge_time_seconds"] = time.time() - start_time
 
-                            # 即使失败，也要记录分片信息用于统计
-                            self.stats["shard_details"].append({
-                                "shard_path": original_path,
-                                "shard_records": shard_count,
-                                "added_records": 0,
-                                "error": str(e),
-                                "retries": max_retries
-                            })
-                            break
-
-                if not merge_success:
-                    continue
-
-            # 提交事务
-            main_conn.commit()
-
-            # 收集统计信息
-            self.stats["total_shards"] = len(shard_paths)
-            self.stats["total_records"] = main_cursor.execute(
-                "SELECT COUNT(*) FROM tariffs"
-            ).fetchone()[0]
-            self.stats["total_shard_records"] = total_shard_records
-
-            # 计算去重的记录数（仅当有成功合并时）
-            if self.stats["successful_shards"] > 0:
-                self.stats["duplicate_records_removed"] = (
-                    total_shard_records - self.stats["total_records"]
-                )
-            else:
-                # 没有成功合并任何分片，去重记录数设为0
-                self.stats["duplicate_records_removed"] = 0
-
-            self.stats["merge_time_seconds"] = time.time() - start_time
-
-            # 关闭连接
-            main_conn.close()
-
-        finally:
-            # 清理临时目录
-            try:
-                shutil.rmtree(temp_dir)
-                print(f"🧹 清理临时目录: {temp_dir}")
-            except Exception as e:
-                print(f"⚠️  清理临时目录失败: {e}")
+        # 关闭连接
+        main_conn.close()
 
         print(f"\n✅ 合并完成!")
         print(f"   总分片数: {self.stats['total_shards']}")
         print(f"   成功合并: {self.stats['successful_shards']}")
         print(f"   失败跳过: {self.stats['failed_shards']}")
 
-        # 仅当有成功合并时显示详细统计
         if self.stats["successful_shards"] > 0:
             print(f"   总记录数: {self.stats['total_records']:,}")
             print(f"   分片记录总计: {self.stats['total_shard_records']:,}")
@@ -239,25 +207,6 @@ class DatabaseMerger:
         print(f"   耗时: {self.stats['merge_time_seconds']:.2f} 秒")
 
         return self.stats
-
-    def _safe_detach(self, cursor, db_name: str):
-        """
-        安全地分离已附加的数据库
-
-        Args:
-            cursor: 数据库游标
-            db_name: 附加的数据库别名
-        """
-        try:
-            # 检查数据库是否已附加
-            cursor.execute("PRAGMA database_list")
-            attached_dbs = [row[1] for row in cursor.fetchall()]
-
-            if db_name in attached_dbs:
-                cursor.execute(f"DETACH DATABASE {db_name}")
-        except Exception as e:
-            # 忽略分离错误，但记录日志
-            print(f"   ⚠️ 清理数据库 {db_name} 时出错: {e}")
 
     def _initialize_main_database(self, db_path: str):
         """
