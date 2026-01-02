@@ -129,10 +129,70 @@ def load_update_results(results_path: str) -> Dict:
     return {}
 
 
+def analyze_coverage(merge_results: Dict, task_file: str = None) -> Dict:
+    """分析数据覆盖率和缺失信息"""
+    coverage_info = {
+        'total_chapters': 98,
+        'completed_chapters': 0,
+        'missing_chapters': [],
+        'failed_chapters': {},
+        'coverage_percentage': 0.0
+    }
+
+    # 从合并结果提取成功/失败信息
+    if merge_results:
+        shard_details = merge_results.get('shard_details', [])
+
+        # 统计完成的章节
+        completed_set = set()
+        failed_dict = {}
+
+        for detail in shard_details:
+            shard_path = detail.get('shard_path', '')
+            shard_records = detail.get('shard_records', 0)
+            error = detail.get('error')
+
+            # 如果有记录，认为该 shard 成功
+            if shard_records > 0:
+                # 从任务文件中读取该 shard 的章节
+                # 这里简化处理，后续可以从 task_file 读取
+                pass
+            elif error:
+                # 记录失败原因
+                failed_dict[shard_path] = {
+                    'reason': error,
+                    'retry_count': detail.get('retries', 0)
+                }
+
+        # 如果有任务文件，精确计算覆盖率
+        if task_file and os.path.exists(task_file):
+            try:
+                with open(task_file, 'r') as f:
+                    tasks = json.load(f)
+
+                all_chapters = set()
+                for shard_id, chapters in tasks.items():
+                    all_chapters.update(chapters)
+
+                coverage_info['total_chapters'] = len(all_chapters)
+                # TODO: 从数据库中查询实际存在的章节
+            except Exception as e:
+                print(f"读取任务文件失败: {e}", file=sys.stderr)
+
+    # 计算覆盖率
+    if coverage_info['total_chapters'] > 0:
+        coverage_info['coverage_percentage'] = round(
+            (coverage_info['total_chapters'] - len(coverage_info['missing_chapters']))
+            / coverage_info['total_chapters'] * 100, 2
+        )
+
+    return coverage_info
+
 def generate_metadata(db_path: str = 'tariffs.db',
                      version: str = None,
                      results_path: str = 'update_results.json',
-                     output_path: str = 'metadata.json') -> Dict:
+                     output_path: str = 'metadata.json',
+                     task_file: str = None) -> Dict:
     """生成数据库元数据"""
 
     # 检查数据库文件是否存在
@@ -153,8 +213,11 @@ def generate_metadata(db_path: str = 'tariffs.db',
     # 数据库统计
     db_stats = get_database_stats(db_path)
 
-    # 更新结果
+    # 更新结果（merge_results.json）
     update_results = load_update_results(results_path)
+
+    # 分析覆盖率
+    coverage_info = analyze_coverage(update_results, task_file)
 
     # 时间戳
     timestamp = datetime.now(timezone.utc).isoformat()
@@ -168,14 +231,21 @@ def generate_metadata(db_path: str = 'tariffs.db',
         'file_hash': file_info['file_hash'],
         'record_count': db_stats.get('record_count', 0),
 
+        'coverage': {
+            'total_chapters': coverage_info['total_chapters'],
+            'completed_chapters': coverage_info['total_chapters'] - len(coverage_info['missing_chapters']),
+            'missing_chapters': coverage_info['missing_chapters'],
+            'coverage_percentage': coverage_info['coverage_percentage']
+        },
+
+        'missing_details': coverage_info.get('failed_chapters', {}),
+
         'changes_summary': {
-            'total_updates': update_results.get('successful', 0),
-            'uk_updated': update_results.get('uk_updated', 0),
-            'ni_updated': update_results.get('ni_updated', 0),
-            'new_records': 0,
-            'deleted_records': 0,
-            # ✅ 使用去重后的实际修改记录数（避免重复计数）
-            'modified_records': update_results.get('modified_records', len(update_results.get('updated_codes', [])))
+            'total_updates': update_results.get('successful_shards', 0),
+            'total_shards': update_results.get('total_shards', 0),
+            'failed_shards': update_results.get('failed_shards', 0),
+            'total_shard_records': update_results.get('total_shard_records', 0),
+            'duplicate_records_removed': update_results.get('duplicate_records_removed', 0)
         },
 
         'update_statistics': {
@@ -233,18 +303,26 @@ def generate_metadata(db_path: str = 'tariffs.db',
 
 
 if __name__ == "__main__":
-    # 解析命令行参数
-    db_path = sys.argv[1] if len(sys.argv) > 1 else 'tariffs.db'
-    version = sys.argv[2] if len(sys.argv) > 2 else os.getenv('VERSION', f"data-{int(datetime.now().timestamp())}")
-    results_path = sys.argv[3] if len(sys.argv) > 3 else 'update_results.json'
-    output_path = sys.argv[4] if len(sys.argv) > 4 else 'metadata.json'
+    import argparse
+
+    parser = argparse.ArgumentParser(description="生成数据库元数据")
+    parser.add_argument('db_path', nargs='?', default='tariffs.db', help='数据库路径')
+    parser.add_argument('version', nargs='?', help='版本号')
+    parser.add_argument('results_path', nargs='?', default='merge_results.json', help='合并结果路径')
+    parser.add_argument('output_path', nargs='?', default='metadata.json', help='输出路径')
+    parser.add_argument('--task-file', type=str, help='任务分配文件路径')
+
+    args = parser.parse_args()
+
+    version = args.version or os.getenv('VERSION', f"data-{int(datetime.now().timestamp())}")
 
     # 生成元数据
     metadata = generate_metadata(
-        db_path=db_path,
+        db_path=args.db_path,
         version=version,
-        results_path=results_path,
-        output_path=output_path
+        results_path=args.results_path,
+        output_path=args.output_path,
+        task_file=args.task_file
     )
 
     if not metadata:

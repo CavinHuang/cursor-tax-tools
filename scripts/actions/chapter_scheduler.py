@@ -22,26 +22,46 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 class ChapterScheduler:
     """章节调度器 - 管理章节分配和断点恢复"""
 
-    # 默认的章节分片配置
-    DEFAULT_SHARD_RANGES = {
-        "shard_0": (1, 25, "uk"),     # UK章节1-25
-        "shard_1": (26, 50, "uk"),    # UK章节26-50
-        "shard_2": (51, 75, "uk"),    # UK章节51-75
-        "shard_3": (76, 99, "uk"),    # UK章节76-99
-        "shard_4": (1, 50, "ni"),     # NI章节1-50
-        "shard_5": (51, 99, "ni"),    # NI章节51-99
-    }
-
-    def __init__(self, metadata_path: Optional[str] = None):
+    def __init__(self, metadata_path: Optional[str] = None, shard_count: int = 10):
         """
         初始化章节调度器
 
         Args:
             metadata_path: 现有 metadata.json 的路径，如果为 None 则尝试下载
+            shard_count: 并行分片数量，默认 10
         """
         self.metadata = None
         self.metadata_path = metadata_path
+        self.shard_count = shard_count
+        self.shard_ranges = self._generate_shard_ranges(shard_count)
         self._load_metadata()
+
+    def _generate_shard_ranges(self, shard_count: int) -> Dict[str, Tuple[int, int]]:
+        """
+        动态生成分片章节范围
+
+        Args:
+            shard_count: 分片数量
+
+        Returns:
+            Dict[str, Tuple[int, int]]: shard_id -> (start_chapter, end_chapter)
+        """
+        total_chapters = 98  # 章节 01-98
+        chapters_per_shard = total_chapters // shard_count
+        remainder = total_chapters % shard_count
+
+        ranges = {}
+        current = 1
+
+        for i in range(shard_count):
+            # 将余数分配给前几个 shard
+            extra = 1 if i < remainder else 0
+            end = current + chapters_per_shard - 1 + extra
+
+            ranges[f"shard_{i}"] = (current, min(end, total_chapters))
+            current = end + 1
+
+        return ranges
 
     def _load_metadata(self):
         """加载现有的元数据"""
@@ -65,7 +85,7 @@ class ChapterScheduler:
         """
         tasks = {}
 
-        for shard_id, (start_chapter, end_chapter, _) in self.DEFAULT_SHARD_RANGES.items():
+        for shard_id, (start_chapter, end_chapter) in self.shard_ranges.items():
             chapters = [
                 f"{chapter:02d}"  # 格式化为两位数，如 "01", "02"
                 for chapter in range(start_chapter, end_chapter + 1)
@@ -106,7 +126,7 @@ class ChapterScheduler:
         """
         tasks = {}
 
-        for shard_id, (start_chapter, end_chapter, _) in self.DEFAULT_SHARD_RANGES.items():
+        for shard_id, (start_chapter, end_chapter) in self.shard_ranges.items():
             chapters = [
                 f"{chapter:02d}"
                 for chapter in range(start_chapter, end_chapter + 1)
@@ -225,6 +245,12 @@ def main():
         help="输出任务分配文件路径"
     )
     parser.add_argument(
+        "--shard-count",
+        type=int,
+        default=10,
+        help="并行分片数量，默认 10"
+    )
+    parser.add_argument(
         "--summary",
         action="store_true",
         help="显示任务摘要"
@@ -233,7 +259,7 @@ def main():
     args = parser.parse_args()
 
     # 创建调度器
-    scheduler = ChapterScheduler(args.metadata)
+    scheduler = ChapterScheduler(args.metadata, shard_count=args.shard_count)
 
     # 获取待处理任务
     tasks = scheduler.get_pending_tasks()

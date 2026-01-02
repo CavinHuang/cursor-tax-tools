@@ -3,6 +3,14 @@ name: 爬取关税数据（并行优化版）
 on:
   workflow_dispatch:
     inputs:
+      update_mode:
+        description: '更新模式'
+        required: false
+        type: choice
+        options:
+          - full
+          - missing_only
+        default: 'full'
       batch_size:
         description: '批量大小'
         required: false
@@ -92,21 +100,34 @@ jobs:
       id: schedule
       run: |
         TEST_MODE="${{ github.event.inputs.test_mode || 'false' }}"
+        UPDATE_MODE="${{ github.event.inputs.update_mode || 'full' }}"
 
-        if [ "$TEST_MODE" = "true" ]; then
+        if [ "$UPDATE_MODE" = "missing_only" ]; then
+          echo "INFO: 补齐模式 - 只爬取缺失章节"
+
+          # 检查是否存在上次的元数据
+          if [ -f "current_metadata.json" ]; then
+            python scripts/actions/generate_missing_tasks.py \
+              --metadata current_metadata.json \
+              --output task_assignment.json \
+              --shard-count 10
+          else
+            echo "WARNING: 没有找到上次元数据，切换为全量模式"
+            python scripts/actions/chapter_scheduler.py \
+              --metadata current_metadata.json \
+              --output task_assignment.json \
+              --shard-count 10
+          fi
+        elif [ "$TEST_MODE" = "true" ]; then
           echo "INFO: 测试模式 - 只爬取前5个章节"
-          # 创建测试任务分配（只有前5个章节）
-          python scripts/actions/chapter_scheduler.py \
-            --metadata current_metadata.json \
-            --output test_task_assignment.json
-
           # 手动限制为前5章
           echo '{"shard_0":["01"],"shard_1":["02"],"shard_2":["03"]}' > task_assignment.json
         else
-          echo "INFO: 正常模式 - 爬取所有章节"
+          echo "INFO: 全量模式 - 爬取所有章节"
           python scripts/actions/chapter_scheduler.py \
             --metadata current_metadata.json \
-            --output task_assignment.json
+            --output task_assignment.json \
+            --shard-count 10
         fi
 
         # 转换为单行JSON供后续步骤使用
@@ -130,7 +151,7 @@ jobs:
     strategy:
       fail-fast: false  # 一个失败不影响其他
       matrix:
-        shard: [0, 1, 2, 3, 4, 5]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 10个并行shard
 
     steps:
     - name: 检出代码
@@ -305,11 +326,17 @@ jobs:
         VERSION: data-${{ needs.prepare.outputs.run_id }}
         GITHUB_REPOSITORY: ${{ github.repository }}
       run: |
+        # 下载任务分配文件以计算覆盖率
+        curl -f -o task_assignment.json \
+          "https://github.com/$GITHUB_REPOSITORY/releases/download/latest-data/task_assignment.json" || \
+          echo '{}' > task_assignment.json
+
         python scripts/actions/generate_metadata.py \
           tariffs.db \
           "$VERSION" \
           merge_results.json \
-          metadata.json
+          metadata.json \
+          --task-file task_assignment.json
 
     - name: 创建更新报告
       run: |
