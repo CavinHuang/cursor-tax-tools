@@ -295,22 +295,33 @@ class ShardExecutor:
                         ni_results = await scraper.scrape_with_retry(ni_urls)
 
                         ni_success_count = 0
+                        ni_failed_count = 0
+
                         for ni_idx, (ni_status, ni_content) in enumerate(ni_results):
+                            code = ni_updates[ni_idx]
+
                             if ni_status == 200 and ni_content:
                                 ni_tariff = scraper.parse_commodity_page(
                                     ni_content,
                                     url=ni_urls[ni_idx]
                                 )
                                 if ni_tariff and ni_tariff.get('rate'):
-                                    code = ni_updates[ni_idx]
                                     scraper.db.update_north_ireland_tariff(
                                         code=code,
                                         north_ireland_rate=ni_tariff['rate'],
                                         north_ireland_url=ni_urls[ni_idx]
                                     )
                                     ni_success_count += 1
+                                else:
+                                    # 页面存在但无法解析税率
+                                    logger.warning(f"      商品 {code} 北爱尔兰页面无税率数据")
+                                    ni_failed_count += 1
+                            else:
+                                # 请求失败或404
+                                logger.warning(f"      商品 {code} 北爱尔兰数据获取失败 (status={ni_status})")
+                                ni_failed_count += 1
 
-                        logger.info(f"    北爱尔兰数据更新: {ni_success_count}/{len(ni_updates)}")
+                        logger.info(f"    北爱尔兰数据更新: {ni_success_count}/{len(ni_updates)} 成功, {ni_failed_count} 失败")
 
                 logger.info(f"  Commodity批次完成，本批处理了 {len(commodity_urls)} 个URL")
 
