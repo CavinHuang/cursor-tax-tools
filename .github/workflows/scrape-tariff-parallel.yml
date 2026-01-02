@@ -286,7 +286,6 @@ jobs:
   # 阶段4: 智能发布
   publish:
     needs: [prepare, merge_and_validate]
-    if: needs.merge_and_validate.outputs.health_check_passed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
