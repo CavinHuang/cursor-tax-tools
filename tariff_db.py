@@ -12,47 +12,45 @@ logger = logging.getLogger(__name__)
 def get_writable_db_path(db_path: str = "tariffs.db") -> str:
     """获取可写的数据库文件路径
 
+    路径优先级：
+    1. 绝对路径 → 直接使用
+    2. 当前目录的数据库文件（如果存在）
+    3. 当前目录（作为默认写入位置）
+    4. 打包资源（仅用于初始化，复制到当前目录）
+
     Args:
         db_path: 数据库文件路径（相对或绝对）
 
     Returns:
         str: 可写的数据库文件绝对路径
     """
-    # 如果是绝对路径，直接返回
+    # 1. 如果是绝对路径，直接返回
     if os.path.isabs(db_path):
         return db_path
 
-    # 获取用户可写目录（优先使用用户目录，其次使用当前目录）
-    if os.name == 'nt':  # Windows
-        user_dir = os.path.expanduser("~")
-        app_dir = os.path.join(user_dir, "uk-tax-tools")
-    else:  # macOS/Linux
-        user_dir = os.path.expanduser("~")
-        app_dir = os.path.join(user_dir, ".uk-tax-tools")
+    # 2. 检查当前目录是否已有数据库文件
+    current_dir_db = os.path.abspath(db_path)
+    if os.path.exists(current_dir_db):
+        logger.info(f"✅ 使用当前目录的数据库: {current_dir_db}")
+        return current_dir_db
 
-    # 确保目录存在
-    os.makedirs(app_dir, exist_ok=True)
+    # 3. 检查是否在打包环境中，且当前目录没有数据库
+    #    如果是，尝试从打包资源复制到当前目录（一次性初始化）
+    if hasattr(sys, '_MEIPASS'):
+        resource_db = os.path.join(sys._MEIPASS, os.path.basename(db_path))
+        if os.path.exists(resource_db):
+            try:
+                # 复制到当前目录（而不是用户目录）
+                shutil.copy2(resource_db, current_dir_db)
+                logger.info(f"✅ 从打包资源初始化数据库到当前目录: {current_dir_db}")
+                return current_dir_db
+            except Exception as e:
+                logger.warning(f"⚠️ 无法从打包资源复制数据库: {e}")
 
-    # 构建数据库路径
-    writable_path = os.path.join(app_dir, os.path.basename(db_path))
-
-    # 如果可写位置的数据库不存在，尝试从打包资源复制
-    if not os.path.exists(writable_path):
-        try:
-            # 尝试从 PyInstaller 临时目录获取
-            if hasattr(sys, '_MEIPASS'):
-                resource_db = os.path.join(sys._MEIPASS, os.path.basename(db_path))
-                if os.path.exists(resource_db):
-                    shutil.copy2(resource_db, writable_path)
-                    logger.info(f"✅ 从打包资源复制数据库到: {writable_path}")
-            # 尝试从当前目录获取
-            elif os.path.exists(db_path):
-                shutil.copy2(db_path, writable_path)
-                logger.info(f"✅ 从当前目录复制数据库到: {writable_path}")
-        except Exception as e:
-            logger.warning(f"⚠️ 无法复制初始数据库: {e}")
-
-    return writable_path
+    # 4. 默认使用当前目录（不再强制使用用户目录）
+    #    这确保所有脚本统一使用当前目录的数据库
+    logger.info(f"ℹ️ 使用当前目录作为数据库路径: {current_dir_db}")
+    return current_dir_db
 
 
 class TariffDB:
