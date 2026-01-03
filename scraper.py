@@ -201,20 +201,35 @@ class TariffScraper:
                                     # 备用方法：直接获取文本
                                     return cell.get_text(strip=True)
 
+                            # 获取 measure type（第二列）
+                            measure_type_cell = cells[1].get_text(strip=True) if len(cells) > 1 else ""
+
                             # 处理United Kingdom或All countries（一般税率）
                             if "All countries" in country_cell or "United Kingdom" in country_cell:
+                                # 只处理 Third country duty 或 other 类型，跳过 Supplementary unit 等
+                                measure_type_lower = measure_type_cell.lower()
+                                if "third country duty" not in measure_type_lower and "other" not in measure_type_lower:
+                                    logger.debug(f"跳过非关税行: {country_cell}, measure type: {measure_type_cell}")
+                                    continue
+
                                 duty_rate = extract_rate(cells[duty_rate_idx])
                                 result['rate'] = duty_rate
-                                logger.debug(f"找到一般税率: {duty_rate}")
+                                logger.debug(f"找到一般税率: {duty_rate} (measure type: {measure_type_cell})")
                                 found_rate = True
                                 # 继续查找Other税率
                                 continue
 
                             # 处理Other地区
                             elif "Other" in country_cell:
+                                # 只处理 Third country duty 或 other 类型
+                                measure_type_lower = measure_type_cell.lower()
+                                if "third country duty" not in measure_type_lower and "other" not in measure_type_lower:
+                                    logger.debug(f"跳过非关税行: {country_cell}, measure type: {measure_type_cell}")
+                                    continue
+
                                 other_rate = extract_rate(cells[duty_rate_idx])
                                 result['other_rate'] = other_rate
-                                logger.debug(f"找到Other税率: {other_rate}")
+                                logger.debug(f"找到Other税率: {other_rate} (measure type: {measure_type_cell})")
 
                     # 如果没有找到一般税率，尝试从Other中获取
                     if not found_rate and result.get('other_rate'):
