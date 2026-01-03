@@ -8,8 +8,8 @@ from Levenshtein import ratio
 logger = logging.getLogger(__name__)
 
 class TariffAPI:
-    def __init__(self):
-        self.db = TariffDB()
+    def __init__(self, db_path: str = "tariffs.db"):
+        self.db = TariffDB(db_path=db_path)
 
     def _normalize_code(self, code: str) -> str:
         """标准化商品编码，只保留数字"""

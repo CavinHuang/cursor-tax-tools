@@ -38,6 +38,56 @@ def resource_path(relative_path: str) -> str:
     return os.path.join(base_path, relative_path)
 
 
+import json
+
+
+CONFIG_FILE = "gui_config.json"
+
+
+def load_config() -> dict:
+    """加载GUI配置文件
+    
+    Returns:
+        dict: 配置字典，如果文件不存在则返回默认配置
+    """
+    default_config = {
+        "db_path": "tariffs.db",
+        "metadata_url": "https://github.com/CavinHuang/cursor-tax-tools/releases/download/latest-data/metadata.json"
+    }
+    
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                logger.info(f"✅ 已加载配置文件: {CONFIG_FILE}")
+                return config
+        else:
+            logger.info(f"ℹ️ 配置文件不存在，使用默认配置")
+            return default_config
+    except Exception as e:
+        logger.error(f"❌ 加载配置文件失败: {e}")
+        return default_config
+
+
+def save_config(config: dict) -> bool:
+    """保存GUI配置文件
+    
+    Args:
+        config: 配置字典
+        
+    Returns:
+        bool: 保存是否成功
+    """
+    try:
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        logger.info(f"✅ 配置已保存到: {CONFIG_FILE}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ 保存配置文件失败: {e}")
+        return False
+
+
 class UpdateDialog:
     """数据更新对话框"""
 
@@ -159,6 +209,9 @@ class TariffGUI:
         self.root = tk.Tk()
         self.root.title("关税查询工具")
 
+        # ✅ 加载配置文件
+        self.config = load_config()
+        
         # ✅ 添加远程更新操作锁
         self.remote_update_lock = threading.Lock()
         self.remote_update_in_progress = False
@@ -301,9 +354,11 @@ class TariffGUI:
         status_bar.pack(fill=tk.X, padx=5, pady=2)
 
     def setup_api(self):
-        """设置API"""
-        self.api = TariffAPI()
-        self.db = TariffDB()
+        """设置API - 使用配置文件中的数据库路径"""
+        db_path = self.config.get("db_path", "tariffs.db")
+        logger.info(f"🔧 使用数据库路径: {db_path}")
+        self.api = TariffAPI(db_path=db_path)
+        self.db = TariffDB(db_path=db_path)
 
     def setup_queue(self):
         """设置消息队列和更新任务"""
@@ -922,12 +977,15 @@ class TariffGUI:
 
         # 数据库路径
         ttk.Label(config_frame, text="数据库路径:").grid(row=1, column=0, sticky='w', padx=5, pady=5)
-        self.db_path_var = tk.StringVar(value="datas/tariffs.db")
+        self.db_path_var = tk.StringVar(value=self.config.get("db_path", "tariffs.db"))
         db_entry = ttk.Entry(config_frame, textvariable=self.db_path_var, width=70)
         db_entry.grid(row=1, column=1, padx=5, pady=5)
 
-        # 浏览按钮
-        ttk.Button(config_frame, text="浏览", command=self.browse_remote_database).grid(row=1, column=2, padx=5, pady=5)
+        # 浏览和应用按钮
+        button_frame = ttk.Frame(config_frame)
+        button_frame.grid(row=1, column=2, padx=5, pady=5)
+        ttk.Button(button_frame, text="浏览", command=self.browse_remote_database).pack(side='left', padx=2)
+        ttk.Button(button_frame, text="应用", command=self.reload_database).pack(side='left', padx=2)
 
         # 状态显示区域
         status_frame = ttk.LabelFrame(self.remote_update_frame, text="当前状态")
@@ -1365,6 +1423,31 @@ class TariffGUI:
             self.local_records_label.config(text="0")
             self.update_status_label.config(text="加载失败", foreground="red")
 
+    def reload_database(self):
+        """重新加载数据库连接"""
+        try:
+            # 关闭旧连接
+            if hasattr(self, 'db'):
+                self.db.close()
+
+            # 获取新的数据库路径
+            new_db_path = self.db_path_var.get()
+            logger.info(f"🔄 重新加载数据库: {new_db_path}")
+
+            # 重新初始化数据库连接
+            self.db = TariffDB(db_path=new_db_path)
+            self.api = TariffAPI(db_path=new_db_path)
+
+            # 更新配置
+            self.config["db_path"] = new_db_path
+
+            logger.info("✅ 数据库重新加载成功")
+            return True
+        except Exception as e:
+            logger.error(f"❌ 重新加载数据库失败: {e}")
+            messagebox.showerror("错误", f"重新加载数据库失败: {str(e)}")
+            return False
+
     def on_closing(self):
         """窗口关闭时的清理工作"""
         # ✅ 检查是否有正在进行的操作
@@ -1374,6 +1457,11 @@ class TariffGUI:
                 "远程更新操作正在进行中，强制关闭可能导致数据损坏。\n确定要关闭吗？"
             ):
                 return
+
+        # ✅ 保存配置文件
+        self.config["db_path"] = self.db_path_var.get()
+        self.config["metadata_url"] = self.metadata_url_var.get()
+        save_config(self.config)
 
         # ✅ 关闭线程池（等待当前任务完成，但不接受新任务）
         if hasattr(self, 'thread_pool'):
