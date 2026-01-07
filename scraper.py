@@ -206,9 +206,12 @@ class TariffScraper:
 
                             # 处理United Kingdom或All countries（一般税率）
                             if "All countries" in country_cell or "United Kingdom" in country_cell:
-                                # 只处理 Third country duty 或 other 类型，跳过 Supplementary unit 等
+                                # 更宽松的匹配：允许 Third country duty, Non preferential duty, Other 等类型
                                 measure_type_lower = measure_type_cell.lower()
-                                if "third country duty" not in measure_type_lower and "other" not in measure_type_lower:
+                                # 定义有效关键词列表
+                                valid_keywords = ["third country duty", "non preferential duty", "other"]
+                                # 只要包含任一关键词就认为是有效行
+                                if not any(keyword in measure_type_lower for keyword in valid_keywords):
                                     logger.debug(f"跳过非关税行: {country_cell}, measure type: {measure_type_cell}")
                                     continue
 
@@ -221,9 +224,12 @@ class TariffScraper:
 
                             # 处理Other地区
                             elif "Other" in country_cell:
-                                # 只处理 Third country duty 或 other 类型
+                                # 更宽松的匹配：允许 Third country duty, Non preferential duty, Other 等类型
                                 measure_type_lower = measure_type_cell.lower()
-                                if "third country duty" not in measure_type_lower and "other" not in measure_type_lower:
+                                # 定义有效关键词列表
+                                valid_keywords = ["third country duty", "non preferential duty", "other"]
+                                # 只要包含任一关键词就认为是有效行
+                                if not any(keyword in measure_type_lower for keyword in valid_keywords):
                                     logger.debug(f"跳过非关税行: {country_cell}, measure type: {measure_type_cell}")
                                     continue
 
