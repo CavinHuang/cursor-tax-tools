@@ -89,6 +89,20 @@ uk-tax-tools/
 - 建议定期更新程序以获取最新的税率数据
 - 如遇到查询结果与实际不符，请反馈给我们
 
+## 数据迁移
+
+### 修复缺失的北爱尔兰 URL
+
+如果数据库中有记录缺失北爱尔兰 URL，运行迁移脚本：
+
+```bash
+# 演练模式（不实际修改）
+python scripts/migrations/fix_missing_ni_urls.py --dry-run
+
+# 实际修复
+python scripts/migrations/fix_missing_ni_urls.py
+```
+
 ## 反馈与建议
 
 如果您在使用过程中遇到问题，或有任何建议，欢迎通过以下方式反馈：
@@ -99,3 +113,7 @@ uk-tax-tools/
 ## 许可证
 
 本项目采用 MIT 许可证，详见 [LICENSE](LICENSE) 文件。
+
+## 数据库架构
+
+详细的数据库架构说明请参见 [docs/database-schema.md](docs/database-schema.md)。
