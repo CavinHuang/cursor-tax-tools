@@ -150,8 +150,8 @@ class TariffScraper:
 
                 result['code'] = code
                 result['url'] = url or f"https://www.trade-tariff.service.gov.uk/commodities/{code}"
-                # 自动生成北爱尔兰 URL（注意双斜杠）
-                result['north_ireland_url'] = f"https://www.trade-tariff.service.gov.uk/xi/commodities//{code}"
+                # 自动生成北爱尔兰 URL
+                result['north_ireland_url'] = f"https://www.trade-tariff.service.gov.uk/xi/commodities/{code}"
 
             # 查找商品描述（更新：使用正确的class名）
             desc_elem = soup.find('h1', class_='commodity-header')
@@ -484,7 +484,7 @@ class TariffScraper:
                     # 如果没有提供 ni_url，自动生成
                     current_ni_url = ni_url
                     if not current_ni_url:
-                        current_ni_url = f"https://www.trade-tariff.service.gov.uk/xi/commodities//{code}"
+                        current_ni_url = f"https://www.trade-tariff.service.gov.uk/xi/commodities/{code}"
                         logger.debug(f"自动生成北爱尔兰 URL: {current_ni_url}")
 
                     try:
