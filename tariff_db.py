@@ -110,15 +110,30 @@ class TariffDB:
             logger.error(f"创建表失败: {str(e)}")
             raise
 
-    def add_tariff(self, code: str, description: str, rate: str, url: str = None, other_rate: str = None):
-        """添加关税记录"""
+    def add_tariff(self, code: str, description: str, rate: str, url: str = None,
+                   other_rate: str = None, north_ireland_url: str = None):
+        """添加关税记录
+
+        Args:
+            code: 商品编码
+            description: 商品描述
+            rate: 英国税率
+            url: 英国URL（可选，默认自动生成）
+            other_rate: 其他税率（可选）
+            north_ireland_url: 北爱尔兰URL（可选，默认自动生成）
+        """
         if url is None:
             url = f"https://www.trade-tariff.service.gov.uk/commodities/{code}"
+
+        # 如果没有提供北爱尔兰URL，自动生成
+        if north_ireland_url is None:
+            north_ireland_url = f"https://www.trade-tariff.service.gov.uk/xi/commodities/{code}"
+
         try:
             with self.conn:
                 self.conn.execute(
-                    "INSERT OR REPLACE INTO tariffs (code, description, rate, url, other_rate) VALUES (?, ?, ?, ?, ?)",
-                    (code, description, rate, url, other_rate)
+                    "INSERT OR REPLACE INTO tariffs (code, description, rate, url, other_rate, north_ireland_url) VALUES (?, ?, ?, ?, ?, ?)",
+                    (code, description, rate, url, other_rate, north_ireland_url)
                 )
         except Exception as e:
             logger.error(f"添加记录失败: {str(e)}")
