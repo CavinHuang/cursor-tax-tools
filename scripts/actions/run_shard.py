@@ -267,12 +267,16 @@ class ShardExecutor:
                                 url=commodity_batch[k]
                             )
                             if tariff:
+                                # 生成北爱尔兰 URL
+                                ni_url = f"https://www.trade-tariff.service.gov.uk/xi/commodities/{tariff['code']}"
+
                                 scraper.db.add_tariff(
                                     code=tariff['code'],
                                     description=tariff['description'],
                                     rate=tariff['rate'],
                                     url=tariff.get('url'),
-                                    other_rate=tariff.get('other_rate')
+                                    other_rate=tariff.get('other_rate'),
+                                    north_ireland_url=ni_url  # 添加北爱尔兰 URL
                                 )
                                 processed_urls.append(commodity_batch[k])
                                 # 记录需要更新北爱尔兰数据的商品
