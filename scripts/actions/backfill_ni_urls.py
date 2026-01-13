@@ -54,7 +54,7 @@ def backfill_ni_urls(dry_run=False):
     if dry_run:
         print("\n🔍 预览模式 - 不会实际更新数据库")
         for code, uk_url in missing[:5]:  # 只显示前5个
-            ni_url = f"https://www.trade-tariff.service.gov.uk/xi/commodities//{code}"
+            ni_url = f"https://www.trade-tariff.service.gov.uk/xi/commodities/{code}"
             print(f"   {code}: {ni_url}")
         if len(missing) > 5:
             print(f"   ... 还有 {len(missing) - 5} 条记录")
@@ -80,8 +80,8 @@ def backfill_ni_urls(dry_run=False):
 
     for code, uk_url in tqdm(missing, desc="处理进度"):
         try:
-            # 生成北爱尔兰 URL（注意双斜杠）
-            ni_url = f"https://www.trade-tariff.service.gov.uk/xi/commodities//{code}"
+            # 生成北爱尔兰 URL
+            ni_url = f"https://www.trade-tariff.service.gov.uk/xi/commodities/{code}"
 
             # 更新数据库
             db.update_tariff(

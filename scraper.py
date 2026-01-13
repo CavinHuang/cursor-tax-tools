@@ -799,7 +799,7 @@ class BatchUpdateManager:
 
                     # 如果需要更新北爱尔兰数据且 URL 为空，自动生成
                     if update_ni and not ni_url:
-                        ni_url = f"https://www.trade-tariff.service.gov.uk/xi/commodities//{code}"
+                        ni_url = f"https://www.trade-tariff.service.gov.uk/xi/commodities/{code}"
                         logger.debug(f"为商品 {code} 自动生成北爱尔兰 URL")
 
                     # 检查是否需要更新
