@@ -112,6 +112,16 @@ class TariffDB:
     def conn(self) -> sqlite3.Connection:
         """获取当前线程的数据库连接"""
         if not hasattr(self._local, "conn"):
+            # 确保数据库文件的父目录存在
+            db_dir = os.path.dirname(self.db_path)
+            if db_dir and not os.path.exists(db_dir):
+                try:
+                    os.makedirs(db_dir, exist_ok=True)
+                    logger.info(f"✅ 创建数据库目录: {db_dir}")
+                except Exception as e:
+                    logger.error(f"❌ 无法创建数据库目录 {db_dir}: {e}")
+                    raise
+
             self._local.conn = sqlite3.connect(self.db_path)
         return self._local.conn
 
