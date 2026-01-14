@@ -49,13 +49,16 @@ class DatabaseMerger:
         output_path: str = None
     ) -> dict:
         """
-        合并多个 shard 数据库
+        合并多个 shard 数据库（智能合并模式）
 
-        合并策略（不使用 ATTACH DATABASE，避免锁定问题）：
+        合并策略：
         1. 创建主数据库（如果不存在）
-        2. 对每个分片：独立连接读取数据，然后批量写入主数据库
-        3. 使用 INSERT OR IGNORE 去重（基于 commodity_code 主键）
-        4. 记录每个分片的统计信息
+        2. 收集所有分片数据到内存中
+        3. 对每个commodity code，智能选择最佳数据：
+           - 优先保留URL不包含 /xi/commodities/ 的记录
+           - 如果数据质量相同，保留先遇到的记录
+        4. 批量写入主数据库
+        5. 记录每个分片的统计信息
 
         Args:
             shard_paths: 分片数据库路径列表
@@ -71,17 +74,14 @@ class DatabaseMerger:
             output_path = self.main_db_path
 
         print(f"🔧 开始合并 {len(shard_paths)} 个分片数据库...")
-        print(f"📝 使用直接读取+写入模式（避免 ATTACH DATABASE 锁定问题）")
+        print(f"📝 使用智能合并模式（优先选择正确的URL）")
 
         # 初始化主数据库
         self._initialize_main_database(output_path)
 
-        # 连接主数据库
-        main_conn = sqlite3.connect(output_path, timeout=60.0)
-        main_conn.execute("PRAGMA journal_mode=WAL")  # 使用 WAL 模式提高并发性能
-        main_cursor = main_conn.cursor()
-
-        # 合并每个分片
+        # 第一步：收集所有分片数据
+        print(f"\n📦 第1步：收集所有分片数据...")
+        all_records = {}  # {code: (record, shard_path, quality_score)}
         total_shard_records = 0
 
         for i, shard_path in enumerate(shard_paths):
@@ -90,128 +90,153 @@ class DatabaseMerger:
                 self.stats["failed_shards"] += 1
                 continue
 
-            # 重试逻辑
-            max_retries = 3
-            merge_success = False
+            try:
+                # 独立连接读取分片数据
+                shard_conn = sqlite3.connect(
+                    f"file:{shard_path}?mode=ro",
+                    uri=True,
+                    timeout=30.0
+                )
+                shard_cursor = shard_conn.cursor()
 
-            for attempt in range(max_retries):
-                try:
-                    # 独立连接读取分片数据
-                    shard_conn = sqlite3.connect(
-                        f"file:{shard_path}?mode=ro",  # 只读模式打开
-                        uri=True,
-                        timeout=30.0
-                    )
-                    shard_cursor = shard_conn.cursor()
+                # 获取分片的列结构
+                shard_cursor.execute("PRAGMA table_info(tariffs)")
+                shard_columns = [row[1] for row in shard_cursor.fetchall()]
+                column_indices = {name: idx for idx, name in enumerate(shard_columns)}
 
-                    # 获取分片的列结构
-                    shard_cursor.execute("PRAGMA table_info(tariffs)")
-                    shard_columns = [row[1] for row in shard_cursor.fetchall()]
+                # 获取分片记录数
+                shard_count = shard_cursor.execute(
+                    "SELECT COUNT(*) FROM tariffs"
+                ).fetchone()[0]
+                total_shard_records += shard_count
 
-                    # 获取分片记录数
-                    shard_count = shard_cursor.execute(
-                        "SELECT COUNT(*) FROM tariffs"
-                    ).fetchone()[0]
-                    total_shard_records += shard_count
+                # 读取所有记录
+                columns_str = ", ".join(shard_columns)
+                shard_cursor.execute(f"SELECT {columns_str} FROM tariffs")
+                records = shard_cursor.fetchall()
 
-                    # 按列名读取所有记录
-                    columns_str = ", ".join(shard_columns)
-                    shard_cursor.execute(f"SELECT {columns_str} FROM tariffs")
-                    records = shard_cursor.fetchall()
+                # 分析每条记录的质量并保存
+                for record in records:
+                    code = record[0]  # code是第一列
+                    url = record[column_indices.get('url', 3)] if 'url' in column_indices else ""
 
-                    # 关闭分片连接
-                    shard_conn.close()
+                    # 计算数据质量分数
+                    quality_score = self._calculate_record_quality(record, column_indices)
 
-                    # 获取合并前的记录数
-                    before_count = main_cursor.execute(
-                        "SELECT COUNT(*) FROM tariffs"
-                    ).fetchone()[0]
-
-                    # 动态构建 INSERT 语句（只使用分片中存在的列）
-                    placeholders = ", ".join(["?"] * len(shard_columns))
-                    insert_sql = f"""
-                        INSERT OR IGNORE INTO tariffs ({columns_str})
-                        VALUES ({placeholders})
-                    """
-                    main_cursor.executemany(insert_sql, records)
-                    main_conn.commit()
-
-                    # 计算实际新增记录数
-                    after_count = main_cursor.execute(
-                        "SELECT COUNT(*) FROM tariffs"
-                    ).fetchone()[0]
-                    added_records = after_count - before_count
-
-                    # 记录统计
-                    self.stats["successful_shards"] += 1
-                    self.stats["shard_details"].append({
-                        "shard_path": shard_path,
-                        "shard_records": shard_count,
-                        "added_records": added_records
-                    })
-
-                    print(f"✅ 分片 {i+1}/{len(shard_paths)}: "
-                          f"+{added_records} 条记录 (分片总计: {shard_count})")
-
-                    merge_success = True
-                    break
-
-                except Exception as e:
-                    if attempt < max_retries - 1:
-                        wait_time = (attempt + 1) * 2
-                        print(f"⏳ 分片 {i+1} 合并失败 (尝试 {attempt+1}/{max_retries}): {e}")
-                        print(f"   等待 {wait_time} 秒后重试...")
-                        time.sleep(wait_time)
+                    # 智能选择：如果该code已存在，比较质量
+                    if code not in all_records:
+                        all_records[code] = (record, shard_path, quality_score)
                     else:
-                        print(f"❌ 合并分片失败 ({shard_path}): {e}")
-                        self.stats["failed_shards"] += 1
-                        self.stats["shard_details"].append({
-                            "shard_path": shard_path,
-                            "shard_records": 0,
-                            "added_records": 0,
-                            "error": str(e),
-                            "retries": max_retries
-                        })
+                        # 如果新记录质量更高，替换
+                        existing_record, existing_shard, existing_score = all_records[code]
+                        if quality_score > existing_score:
+                            all_records[code] = (record, shard_path, quality_score)
 
-            if not merge_success:
+                shard_conn.close()
+                self.stats["successful_shards"] += 1
+                print(f"   ✅ 分片 {i+1}: {shard_count} 条记录")
+
+            except Exception as e:
+                print(f"   ❌ 分片 {i+1} 读取失败: {e}")
+                self.stats["failed_shards"] += 1
                 continue
+
+        print(f"\n   📊 收集完成：{len(all_records)} 条唯一记录（总分片记录：{total_shard_records}）")
+
+        # 第二步：批量写入主数据库
+        print(f"\n💾 第2步：批量写入主数据库...")
+
+        main_conn = sqlite3.connect(output_path, timeout=60.0)
+        main_conn.execute("PRAGMA journal_mode=WAL")
+        main_cursor = main_conn.cursor()
+
+        # 准备插入数据
+        records_to_insert = list(all_records.values())
+
+        # 动态构建 INSERT 语句
+        if records_to_insert:
+            # 使用第一条记录确定列结构
+            first_record = records_to_insert[0][0]
+            num_columns = len(first_record)
+            placeholders = ", ".join(["?"] * num_columns)
+
+            # 获取列名（从第一条记录）
+            main_cursor.execute("PRAGMA table_info(tariffs)")
+            main_columns = [row[1] for row in main_cursor.fetchall()]
+            columns_str = ", ".join(main_columns)
+
+            insert_sql = f"""
+                INSERT OR REPLACE INTO tariffs ({columns_str})
+                VALUES ({placeholders})
+            """
+
+            main_cursor.executemany(insert_sql, [r[0] for r in records_to_insert])
+            main_conn.commit()
+
+        main_conn.close()
 
         # 收集统计信息
         self.stats["total_shards"] = len(shard_paths)
-        self.stats["total_records"] = main_cursor.execute(
-            "SELECT COUNT(*) FROM tariffs"
-        ).fetchone()[0]
+        self.stats["total_records"] = len(all_records)
         self.stats["total_shard_records"] = total_shard_records
-
-        # 计算去重的记录数
-        if self.stats["successful_shards"] > 0:
-            self.stats["duplicate_records_removed"] = (
-                total_shard_records - self.stats["total_records"]
-            )
-        else:
-            self.stats["duplicate_records_removed"] = 0
-
+        self.stats["duplicate_records_removed"] = total_shard_records - len(all_records)
         self.stats["merge_time_seconds"] = time.time() - start_time
-
-        # 关闭连接
-        main_conn.close()
 
         print(f"\n✅ 合并完成!")
         print(f"   总分片数: {self.stats['total_shards']}")
         print(f"   成功合并: {self.stats['successful_shards']}")
         print(f"   失败跳过: {self.stats['failed_shards']}")
-
-        if self.stats["successful_shards"] > 0:
-            print(f"   总记录数: {self.stats['total_records']:,}")
-            print(f"   分片记录总计: {self.stats['total_shard_records']:,}")
-            print(f"   去重记录: {self.stats['duplicate_records_removed']:,}")
-        else:
-            print(f"   ⚠️  所有分片合并失败，使用现有数据库")
-            print(f"   现有记录数: {self.stats['total_records']:,}")
-
+        print(f"   总记录数: {self.stats['total_records']:,}")
+        print(f"   分片记录总计: {self.stats['total_shard_records']:,}")
+        print(f"   智能去重: {self.stats['duplicate_records_removed']:,} 条重复记录已处理")
         print(f"   耗时: {self.stats['merge_time_seconds']:.2f} 秒")
 
         return self.stats
+
+    def _calculate_record_quality(self, record: tuple, column_indices: dict) -> int:
+        """
+        计算记录质量分数（用于智能合并）
+
+        评分规则：
+        - URL包含 /xi/commodities/: -50分（错误URL）
+        - 有描述: +10分
+        - 有税率: +10分
+        - 有北爱尔兰税率: +5分
+        - 有北爱尔兰URL: +5分
+
+        Args:
+            record: 数据库记录
+            column_indices: 列名到索引的映射
+
+        Returns:
+            int: 质量分数（越高越好）
+        """
+        score = 0
+
+        # 检查URL（最重要的指标）
+        url = record[column_indices.get('url', 3)] if 'url' in column_indices else ""
+        if url:
+            if '/xi/commodities/' in url:
+                score -= 50  # 严重惩罚：错误的URL
+            else:
+                score += 20  # 正确的英国URL
+
+        # 检查数据完整性
+        description = record[column_indices.get('description', 1)] if 'description' in column_indices else ""
+        rate = record[column_indices.get('rate', 2)] if 'rate' in column_indices else ""
+        north_ireland_rate = record[column_indices.get('north_ireland_rate', 4)] if 'north_ireland_rate' in column_indices else ""
+        north_ireland_url = record[column_indices.get('north_ireland_url', 5)] if 'north_ireland_url' in column_indices else ""
+
+        if description:
+            score += 10
+        if rate:
+            score += 10
+        if north_ireland_rate:
+            score += 5
+        if north_ireland_url:
+            score += 5
+
+        return score
 
     def _initialize_main_database(self, db_path: str):
         """

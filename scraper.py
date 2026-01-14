@@ -121,10 +121,11 @@ class TariffScraper:
         soup = BeautifulSoup(html, 'html.parser')
         links = []
 
-        # 查找所有commodity链接
+        # 查找所有commodity链接（只抓取英国commodity，过滤北爱尔兰）
         for link in soup.find_all('a', href=True):
             href = link.get('href')
-            if href and '/commodities/' in href:
+            # 只抓取英国commodity，过滤掉北爱尔兰commodity（/xi/commodities/）
+            if href and '/commodities/' in href and '/xi/commodities/' not in href:
                 full_url = f"{self.base_url}{href}"
                 if full_url not in self.visited_urls:
                     links.append(full_url)
