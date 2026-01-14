@@ -127,7 +127,7 @@ jobs:
           python src/actions/chapter_scheduler.py \
             --metadata current_metadata.json \
             --output task_assignment.json \
-            --shard-count 10
+            --shard-count 15
         fi
 
         # 转换为单行JSON供后续步骤使用
