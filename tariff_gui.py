@@ -1066,15 +1066,31 @@ class TariffGUI:
         self.remote_log_text.pack(side='left', fill='both', expand=True, padx=5, pady=5)
         self.remote_log_scrollbar.pack(side='right', fill='y', pady=5)
 
-        # 进度条
+        # 进度条容器框架（方便统一显示/隐藏）
+        self.progress_frame = ttk.Frame(self.remote_update_frame)
+        self.progress_frame.pack(fill='x', padx=10, pady=5)
+
+        # 进度条（使用determinate模式显示实际下载进度）
         self.remote_progress_var = tk.DoubleVar()
         self.remote_progress_bar = ttk.Progressbar(
-            self.remote_update_frame,
+            self.progress_frame,
             variable=self.remote_progress_var,
-            mode='indeterminate',
+            mode='determinate',
+            maximum=100,
             length=400
         )
-        self.remote_progress_bar.pack(fill='x', padx=10, pady=5)
+        self.remote_progress_bar.pack(fill='x')
+
+        # 进度标签（显示百分比文字）
+        self.remote_progress_label = ttk.Label(
+            self.progress_frame,
+            text="0%",
+            foreground="blue"
+        )
+        self.remote_progress_label.pack(pady=2)
+
+        # 初始化时隐藏进度条
+        self.progress_frame.pack_forget()
 
         # 初始化远程更新检查器
         self.smart_update_checker = None
@@ -1236,7 +1252,10 @@ class TariffGUI:
                 try:
                     # ✅ 使用队列更新UI
                     self.queue.put((self.set_remote_ui_state, (False,), {}))
-                    self.queue.put((self.remote_progress_bar.start, (), {}))
+                    # 显示进度条并重置为0
+                    self.queue.put((self.show_progress_bar, (), {}))
+                    self.queue.put((self.remote_progress_var.set, (0,), {}))
+                    self.queue.put((self.remote_progress_label.config, (), {'text': "0%"}))
                     self.queue.put((self.add_remote_log, ("🔄 开始强制更新...",), {}))
 
                     # 初始化更新检查器
@@ -1244,27 +1263,64 @@ class TariffGUI:
                     metadata_url = self.metadata_url_var.get()
                     self.smart_update_checker = SmartUpdateChecker(metadata_url, db_path)
 
-                    # 执行强制更新
-                    result = self.smart_update_checker.check_and_update(force_update=True)
+                    # 定义进度回调函数
+                    def progress_callback(downloaded_bytes, total_bytes, percentage):
+                        """下载进度回调,在主线程中更新进度条"""
+                        try:
+                            # 使用队列安全地更新UI
+                            self.queue.put((self.remote_progress_var.set, (percentage,), {}))
+
+                            # 更新进度标签文字
+                            self.queue.put((
+                                self.remote_progress_label.config,
+                                (),
+                                {'text': f"{percentage:.1f}%"}
+                            ))
+
+                            # 每10%记录一次日志
+                            if int(percentage) % 10 == 0 and int(percentage) != 0:
+                                mb_downloaded = downloaded_bytes / 1024 / 1024
+                                mb_total = total_bytes / 1024 / 1024
+                                self.queue.put((
+                                    self.add_remote_log,
+                                    (f"📥 下载进度: {percentage:.1f}% ({mb_downloaded:.1f}MB / {mb_total:.1f}MB)",),
+                                    {}
+                                ))
+                        except Exception as e:
+                            logger.warning(f"进度回调更新UI失败: {str(e)}")
+
+                    # 执行强制更新（传递进度回调）
+                    result = self.smart_update_checker.check_and_update(force_update=True, progress_callback=progress_callback)
 
                     # ✅ 使用队列更新UI
                     update_success = False
                     if result['status'] == 'success':
+                        # 更新成功，设置进度条为100%
+                        self.queue.put((self.remote_progress_var.set, (100,), {}))
+                        self.queue.put((self.remote_progress_label.config, (), {'text': "100%"}))
                         self.queue.put((self.add_remote_log, (f"✅ 更新成功: {result['message']}",), {}))
                         self.queue.put((self.update_status_label.config, (), {'text': "更新成功", 'foreground': "green"}))
                         update_success = True
+
+                        # 延迟1秒后隐藏进度条（让用户看到100%）
+                        import time
+                        time.sleep(1)
+                        self.queue.put((self.hide_progress_bar, (), {}))
                     else:
+                        # 更新失败，隐藏进度条
+                        self.queue.put((self.hide_progress_bar, (), {}))
                         self.queue.put((self.add_remote_log, (f"❌ 更新失败: {result['message']}",), {}))
                         self.queue.put((self.update_status_label.config, (), {'text': "更新失败", 'foreground': "red"}))
 
                 except Exception as e:
                     # ✅ 使用队列更新UI
+                    # 异常时隐藏进度条
+                    self.queue.put((self.hide_progress_bar, (), {}))
                     self.queue.put((self.add_remote_log, (f"❌ 强制更新异常: {str(e)}",), {}))
                     self.queue.put((self.update_status_label.config, (), {'text': "更新异常", 'foreground': "red"}))
                     update_success = False
                 finally:
                     # ✅ 使用队列更新UI
-                    self.queue.put((self.remote_progress_bar.stop, (), {}))
                     self.queue.put((self.set_remote_ui_state, (True,), {}))
                     self.remote_update_in_progress = False
 
@@ -1281,6 +1337,14 @@ class TariffGUI:
         self.check_remote_update_btn.config(state=state)
         self.force_remote_update_btn.config(state=state)
         self.refresh_status_btn.config(state=state)
+
+    def show_progress_bar(self):
+        """显示进度条"""
+        self.progress_frame.pack(fill='x', padx=10, pady=5)
+
+    def hide_progress_bar(self):
+        """隐藏进度条"""
+        self.progress_frame.pack_forget()
 
     def add_remote_log(self, message):
         """添加远程更新日志"""

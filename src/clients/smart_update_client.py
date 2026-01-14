@@ -296,7 +296,7 @@ class SmartUpdateChecker:
             f"⏱️ 重试下载数据库 (第{details['tries']}次尝试，等待{details['wait']:.1f}秒)..."
         )
     )
-    def download_database(self, download_url: str, verify_checksum: bool = True) -> bool:
+    def download_database(self, download_url: str, verify_checksum: bool = True, progress_callback=None) -> bool:
         """下载数据库文件（带重试机制）
 
         重试策略：
@@ -308,6 +308,7 @@ class SmartUpdateChecker:
         Args:
             download_url: 数据库下载URL
             verify_checksum: 是否验证文件完整性
+            progress_callback: 进度回调函数，接收参数(downloaded_bytes, total_bytes, percentage)
 
         Returns:
             bool: 下载是否成功
@@ -332,9 +333,18 @@ class SmartUpdateChecker:
                         f.write(chunk)
                         downloaded_size += len(chunk)
 
-                        # 显示下载进度
+                        # 计算下载进度
                         if total_size > 0:
                             progress = (downloaded_size / total_size) * 100
+
+                            # 调用进度回调函数（如果提供）
+                            if progress_callback:
+                                try:
+                                    progress_callback(downloaded_size, total_size, progress)
+                                except Exception as e:
+                                    logger.warning(f"进度回调函数执行失败: {str(e)}")
+
+                            # 控制台显示进度
                             print(f"\r📥 下载进度: {progress:.1f}%", end="", flush=True)
 
             print()  # 换行
@@ -371,8 +381,13 @@ class SmartUpdateChecker:
                 self._restore_backup()
             return False
 
-    def check_and_update(self, force_update: bool = False) -> Dict:
-        """检查并执行更新"""
+    def check_and_update(self, force_update: bool = False, progress_callback=None) -> Dict:
+        """检查并执行更新
+
+        Args:
+            force_update: 是否强制更新
+            progress_callback: 进度回调函数，接收参数(downloaded_bytes, total_bytes, percentage)
+        """
         result = {
             'status': 'unknown',
             'message': '',
@@ -427,8 +442,8 @@ class SmartUpdateChecker:
                 result['message'] = '无法获取下载链接'
                 return result
 
-            # 下载数据库
-            if self.download_database(download_url):
+            # 下载数据库（传递进度回调）
+            if self.download_database(download_url, verify_checksum=True, progress_callback=progress_callback):
                 # 保存新的元数据
                 self.save_local_metadata(remote_metadata)
 

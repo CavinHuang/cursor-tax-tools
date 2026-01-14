@@ -537,8 +537,12 @@ class TariffScraper:
             uk_data_parsed, uk_error = uk_result if isinstance(uk_result, tuple) else (None, "英国数据解析异常")
             ni_data_parsed, ni_error = ni_result if isinstance(ni_result, tuple) else (None, "北爱尔兰数据解析异常")
 
-            # 处理404状态 - 如果两个地区都是404，删除记录
-            if uk_error is None and (ni_error is None or ni_error == "未提供北爱尔兰URL"):
+            # 处理404状态 - 只有当两个地区都是404（数据为None且错误也为None）时才删除记录
+            # 修复逻辑：必须同时检查 data is None 和 error is None，避免误删成功抓取的数据
+            uk_is_404 = (uk_data_parsed is None and uk_error is None)
+            ni_is_404_or_not_provided = (ni_data_parsed is None and (ni_error is None or ni_error == "未提供北爱尔兰URL"))
+
+            if uk_is_404 and ni_is_404_or_not_provided:
                 logger.info(f"商品编码 {code} 在所有地区都返回404，删除记录")
                 # 先清理error记录（防止循环操作）
                 self.db.clear_scrape_error(code)

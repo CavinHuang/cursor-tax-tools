@@ -333,10 +333,17 @@ class TariffDB:
         """更新北爱尔兰关税记录"""
         try:
             with self.conn:
-                self.conn.execute(
-                    "UPDATE tariffs SET north_ireland_rate = ?, north_ireland_url = ?, last_updated = CURRENT_TIMESTAMP WHERE code = ?",
-                    (north_ireland_rate, north_ireland_url, code)
-                )
+                # 根据是否有 last_updated 列使用不同的更新语句
+                if self._has_last_updated:
+                    self.conn.execute(
+                        "UPDATE tariffs SET north_ireland_rate = ?, north_ireland_url = ?, last_updated = CURRENT_TIMESTAMP WHERE code = ?",
+                        (north_ireland_rate, north_ireland_url, code)
+                    )
+                else:
+                    self.conn.execute(
+                        "UPDATE tariffs SET north_ireland_rate = ?, north_ireland_url = ? WHERE code = ?",
+                        (north_ireland_rate, north_ireland_url, code)
+                    )
         except Exception as e:
             logger.error(f"更新北爱尔兰关税记录失败: {str(e)}")
             raise
@@ -372,8 +379,9 @@ class TariffDB:
                 logger.warning("没有提供任何要更新的字段")
                 return
 
-            # 总是更新 last_updated 时间戳
-            updates.append("last_updated = CURRENT_TIMESTAMP")
+            # 如果有 last_updated 列，则更新时间戳
+            if self._has_last_updated:
+                updates.append("last_updated = CURRENT_TIMESTAMP")
 
             params.append(code)  # WHERE条件
 
