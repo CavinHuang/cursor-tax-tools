@@ -93,6 +93,16 @@ class TariffDB:
                     else:
                         raise e
 
+                # 检查是否需要添加last_updated字段（为了向后兼容旧版本数据库）
+                try:
+                    self.conn.execute("ALTER TABLE tariffs ADD COLUMN last_updated DATETIME DEFAULT CURRENT_TIMESTAMP")
+                    logger.info("✅ 成功添加last_updated列")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name" in str(e).lower():
+                        logger.debug("ℹ️ last_updated列已存在，跳过")
+                    else:
+                        raise e
+
                 # 创建索引
                 self.conn.execute("CREATE INDEX IF NOT EXISTS idx_code ON tariffs(code)")
 
@@ -132,7 +142,7 @@ class TariffDB:
         try:
             with self.conn:
                 self.conn.execute(
-                    "INSERT OR REPLACE INTO tariffs (code, description, rate, url, other_rate, north_ireland_url) VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT OR REPLACE INTO tariffs (code, description, rate, url, other_rate, north_ireland_url, last_updated) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
                     (code, description, rate, url, other_rate, north_ireland_url)
                 )
         except Exception as e:
@@ -143,7 +153,7 @@ class TariffDB:
         """精确查询关税记录"""
         try:
             cur = self.conn.execute(
-                "SELECT code, description, rate, url, north_ireland_rate, north_ireland_url, other_rate FROM tariffs WHERE code = ?",
+                "SELECT code, description, rate, url, north_ireland_rate, north_ireland_url, other_rate, last_updated FROM tariffs WHERE code = ?",
                 (code,)
             )
             row = cur.fetchone()
@@ -155,7 +165,8 @@ class TariffDB:
                     'url': row[3],
                     'north_ireland_rate': row[4],
                     'north_ireland_url': row[5],
-                    'other_rate': row[6]
+                    'other_rate': row[6],
+                    'last_updated': row[7]
                 }
             return None
         except Exception as e:
@@ -165,7 +176,7 @@ class TariffDB:
     def get_all_tariffs(self) -> List[Dict]:
         """获取所有关税记录"""
         try:
-            cur = self.conn.execute("SELECT code, description, rate, url, north_ireland_url, north_ireland_rate FROM tariffs")
+            cur = self.conn.execute("SELECT code, description, rate, url, north_ireland_url, north_ireland_rate, last_updated FROM tariffs")
             return [
                 {
                     'code': row[0],
@@ -173,7 +184,8 @@ class TariffDB:
                     'rate': row[2],
                     'url': row[3],
                     'north_ireland_url': row[4],
-                    'north_ireland_rate': row[5]
+                    'north_ireland_rate': row[5],
+                    'last_updated': row[6]
                 }
                 for row in cur.fetchall()
             ]
@@ -243,7 +255,7 @@ class TariffDB:
     def update_north_ireland_tariff(self, code: str, north_ireland_rate: str, north_ireland_url: str):
         try:
             with self.conn:
-                self.conn.execute("UPDATE tariffs SET north_ireland_rate = ?, north_ireland_url = ? WHERE code = ?", (north_ireland_rate, north_ireland_url, code))
+                self.conn.execute("UPDATE tariffs SET north_ireland_rate = ?, north_ireland_url = ?, last_updated = CURRENT_TIMESTAMP WHERE code = ?", (north_ireland_rate, north_ireland_url, code))
         except Exception as e:
             logger.error(f"更新北爱尔兰关税记录失败: {str(e)}")
             raise
@@ -278,6 +290,9 @@ class TariffDB:
             if not updates:
                 logger.warning("没有提供任何要更新的字段")
                 return
+
+            # 总是更新 last_updated 时间戳
+            updates.append("last_updated = CURRENT_TIMESTAMP")
 
             params.append(code)  # WHERE条件
 
