@@ -107,16 +107,16 @@ jobs:
 
           # 检查是否存在上次的元数据
           if [ -f "current_metadata.json" ]; then
-            python scripts/actions/generate_missing_tasks.py \
+            python src/actions/generate_missing_tasks.py \
               --metadata current_metadata.json \
               --output task_assignment.json \
-              --shard-count 10
+              --shard-count 15
           else
             echo "WARNING: 没有找到上次元数据，切换为全量模式"
-            python scripts/actions/chapter_scheduler.py \
+            python src/actions/chapter_scheduler.py \
               --metadata current_metadata.json \
               --output task_assignment.json \
-              --shard-count 10
+              --shard-count 15
           fi
         elif [ "$TEST_MODE" = "true" ]; then
           echo "INFO: 测试模式 - 只爬取前5个章节"
@@ -146,12 +146,12 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.should_run == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 100
+    timeout-minutes: 60
 
     strategy:
       fail-fast: false  # 一个失败不影响其他
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 10个并行shard
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]  # 15个并行shard
 
     steps:
     - name: 检出代码
@@ -184,7 +184,7 @@ jobs:
         echo "INFO: 开始执行 Shard ${{ matrix.shard }}..."
 
         # 执行爬取（带超时保护）
-        timeout 90m python scripts/actions/run_shard.py \
+        timeout 90m python src/actions/run_shard.py \
           --shard-id $SHARD_ID \
           --task-file task_assignment.json \
           --output-db tariffs_${SHARD_ID}.db || {
@@ -241,7 +241,7 @@ jobs:
       run: |
         echo "INFO: 合并分片数据库..."
 
-        python scripts/actions/merge_databases.py \
+        python src/actions/merge_databases.py \
           --input-dir artifacts \
           --output tariffs.db \
           --allow-partial \
@@ -255,7 +255,7 @@ jobs:
       run: |
         echo "INFO: 执行数据库健康检查..."
 
-        if python scripts/actions/validate_database.py tariffs.db; then
+        if python src/actions/validate_database.py tariffs.db; then
           echo "health_check_passed=true" >> $GITHUB_OUTPUT
           echo "SUCCESS: 数据库健康检查通过"
 
@@ -330,7 +330,7 @@ jobs:
           "https://github.com/$GITHUB_REPOSITORY/releases/download/latest-data/task_assignment.json" || \
           echo '{}' > task_assignment.json
 
-        python scripts/actions/generate_metadata.py \
+        python src/actions/generate_metadata.py \
           tariffs.db \
           "$VERSION" \
           merge_results.json \

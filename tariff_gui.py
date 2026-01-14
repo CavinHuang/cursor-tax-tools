@@ -4,14 +4,14 @@ from typing import Dict
 import logging
 from tariff_api import TariffAPI
 from tariff_db import TariffDB
-from smart_update_client import SmartUpdateChecker
+from src.clients.smart_update_client import SmartUpdateChecker
 import queue
 import threading
 import asyncio
 import os
 import sys
 from datetime import datetime
-from batch_gui import BatchProcessFrame
+from src.gui.batch_frame import BatchProcessFrame
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
