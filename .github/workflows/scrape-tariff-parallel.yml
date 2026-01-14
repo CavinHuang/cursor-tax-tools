@@ -124,7 +124,7 @@ jobs:
           echo '{"shard_0":["01"],"shard_1":["02"],"shard_2":["03"]}' > task_assignment.json
         else
           echo "INFO: 全量模式 - 爬取所有章节"
-          python scripts/actions/chapter_scheduler.py \
+          python src/actions/chapter_scheduler.py \
             --metadata current_metadata.json \
             --output task_assignment.json \
             --shard-count 10
