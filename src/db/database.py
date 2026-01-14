@@ -26,9 +26,9 @@ def get_writable_db_path(db_path: str = "tariffs.db") -> str:
 
     路径优先级：
     1. 绝对路径 → 直接使用
-    2. 当前目录的数据库文件（如果存在）
-    3. 当前目录（作为默认写入位置）
-    4. 打包资源（仅用于初始化，复制到当前目录）
+    2. 当前目录的数据库文件（如果存在且可写）
+    3. 用户数据目录（打包环境的回退方案）
+    4. 打包资源（仅用于初始化，复制到可写位置）
 
     Args:
         db_path: 数据库文件路径（相对或绝对）
@@ -40,29 +40,44 @@ def get_writable_db_path(db_path: str = "tariffs.db") -> str:
     if os.path.isabs(db_path):
         return db_path
 
-    # 2. 检查当前目录是否已有数据库文件
+    # 2. 检查当前目录是否已有数据库文件且可写
     current_dir_db = os.path.abspath(db_path)
     if os.path.exists(current_dir_db):
-        logger.info(f"✅ 使用当前目录的数据库: {current_dir_db}")
-        return current_dir_db
+        # 检查是否可写
+        if os.access(os.path.dirname(current_dir_db), os.W_OK):
+            logger.info(f"✅ 使用当前目录的数据库: {current_dir_db}")
+            return current_dir_db
+        else:
+            logger.warning(f"⚠️ 当前目录不可写，将使用用户数据目录")
 
-    # 3. 检查是否在打包环境中，且当前目录没有数据库
-    #    如果是，尝试从打包资源复制到当前目录（一次性初始化）
-    if hasattr(sys, '_MEIPASS'):
+    # 3. 尝试在当前目录创建（如果可写）
+    if os.access(os.path.dirname(current_dir_db) or ".", os.W_OK):
+        target_db = current_dir_db
+    else:
+        # 当前目录不可写（如打包后的 Program Files），使用用户数据目录
+        if sys.platform == "win32":
+            app_data_dir = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "TariffTools")
+        elif sys.platform == "darwin":
+            app_data_dir = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "TariffTools")
+        else:
+            app_data_dir = os.path.join(os.path.expanduser("~"), ".tarifftools")
+
+        # 确保目录存在
+        os.makedirs(app_data_dir, exist_ok=True)
+        target_db = os.path.join(app_data_dir, os.path.basename(db_path))
+        logger.info(f"ℹ️ 使用用户数据目录: {target_db}")
+
+    # 4. 如果在打包环境中且目标数据库不存在，从打包资源复制
+    if hasattr(sys, '_MEIPASS') and not os.path.exists(target_db):
         resource_db = os.path.join(sys._MEIPASS, os.path.basename(db_path))
         if os.path.exists(resource_db):
             try:
-                # 复制到当前目录（而不是用户目录）
-                shutil.copy2(resource_db, current_dir_db)
-                logger.info(f"✅ 从打包资源初始化数据库到当前目录: {current_dir_db}")
-                return current_dir_db
+                shutil.copy2(resource_db, target_db)
+                logger.info(f"✅ 从打包资源初始化数据库: {target_db}")
             except Exception as e:
                 logger.warning(f"⚠️ 无法从打包资源复制数据库: {e}")
 
-    # 4. 默认使用当前目录（不再强制使用用户目录）
-    #    这确保所有脚本统一使用当前目录的数据库
-    logger.info(f"ℹ️ 使用当前目录作为数据库路径: {current_dir_db}")
-    return current_dir_db
+    return target_db
 
 
 class TariffDB:
