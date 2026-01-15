@@ -1418,6 +1418,12 @@ class TariffGUI:
             if not self.smart_update_checker:
                 return
 
+            # 🔧 关键修复：重新初始化API和DB对象，确保连接到新的数据库文件
+            # 这是必需的，因为数据库文件被替换后，旧的连接仍然指向旧文件句柄
+            logger.info("🔄 重新初始化数据库连接...")
+            self.setup_api()
+            self.add_remote_log("🔄 已重新初始化数据库连接")
+
             # 重新加载本地元数据和数据库信息
             local_metadata = self.smart_update_checker.load_local_metadata()
             local_db_info = self.smart_update_checker.get_local_db_info()
