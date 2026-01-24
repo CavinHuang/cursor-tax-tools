@@ -270,6 +270,11 @@ class TariffScraper:
                 self.db.add_scrape_error(result['code'], error_msg)
                 result['rate'] = ''
 
+            # 解析贸易救济措施（反倾销税、反补贴税）
+            trade_remedies_data = self.parse_trade_remedies(soup)
+            result['anti_dumping_rate'] = trade_remedies_data['anti_dumping_rate']
+            result['countervailing_rate'] = trade_remedies_data['countervailing_rate']
+
             return result
 
         except Exception as e:
@@ -278,6 +283,78 @@ class TariffScraper:
             if result.get('code'):
                 self.db.add_scrape_error(result['code'], error_msg)
             return {}
+
+    def parse_trade_remedies(self, soup: BeautifulSoup) -> Dict[str, str]:
+        """解析贸易救济措施（反倾销税、反补贴税）
+
+        Returns:
+            Dict: {
+                'anti_dumping_rate': str,    # 反倾销税率
+                'countervailing_rate': str   # 反补贴税率
+            }
+        """
+        result = {
+            'anti_dumping_rate': '',
+            'countervailing_rate': ''
+        }
+
+        try:
+            # 1. 查找 trade_remedies 部分
+            trade_remedies_header = soup.find('h3', id='trade_remedies')
+            if not trade_remedies_header:
+                return result
+
+            # 2. 查找下一个表格
+            next_table = trade_remedies_header.find_next_sibling('table', class_='small-table')
+            if not next_table:
+                return result
+
+            # 3. 解析表格列索引
+            headers = next_table.find_all('th')
+            measure_type_idx = None
+            duty_rate_idx = None
+
+            for i, th in enumerate(headers):
+                header_text = th.text.strip()
+                if "Measure type" in header_text:
+                    measure_type_idx = i
+                elif "Duty rate" in header_text:
+                    duty_rate_idx = i
+
+            if measure_type_idx is None or duty_rate_idx is None:
+                return result
+
+            # 4. 遍历表格行
+            rows = next_table.find_all('tr')
+            for row in rows:
+                cells = row.find_all(['td', 'th'])
+                if len(cells) <= max(measure_type_idx, duty_rate_idx):
+                    continue
+
+                # 检查是否为 "所有其他海外出口商"
+                measure_type_cell = cells[measure_type_idx].get_text(strip=True)
+
+                if "All other overseas exporters" in measure_type_cell and "residual amount" in measure_type_cell:
+                    # 提取税率
+                    duty_rate_cell = cells[duty_rate_idx]
+                    duty_rate_elem = duty_rate_cell.find('span', class_='duty-expression')
+                    if duty_rate_elem:
+                        rate_span = duty_rate_elem.find('span')
+                        rate = rate_span.get_text(strip=True) if rate_span else duty_rate_elem.get_text(strip=True)
+
+                        # 根据完整的 measure type 判断是反倾销还是反补贴
+                        full_measure_type = measure_type_cell.lower()
+                        if "anti-dumping" in full_measure_type or "anti dumping" in full_measure_type:
+                            result['anti_dumping_rate'] = rate
+                            logger.debug(f"找到反倾销税率: {rate}")
+                        elif "countervailing" in full_measure_type:
+                            result['countervailing_rate'] = rate
+                            logger.debug(f"找到反补贴税率: {rate}")
+
+        except Exception as e:
+            logger.warning(f"解析贸易救济措施失败: {str(e)}")
+
+        return result
 
     async def initialize(self) -> bool:
         """初始化抓取器，返回是否成功"""
@@ -419,7 +496,9 @@ class TariffScraper:
                     description=tariff['description'],
                     rate=tariff['rate'],
                     url=tariff.get('url'),
-                    other_rate=tariff.get('other_rate')
+                    other_rate=tariff.get('other_rate'),
+                    anti_dumping_rate=tariff.get('anti_dumping_rate'),
+                    countervailing_rate=tariff.get('countervailing_rate')
                 )
                 self.existing_codes.add(tariff['code'])  # 更新已存在编码集合
                 saved_count += 1

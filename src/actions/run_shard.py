@@ -277,7 +277,9 @@ class ShardExecutor:
                                     rate=tariff['rate'],
                                     url=tariff.get('url'),
                                     other_rate=tariff.get('other_rate'),
-                                    north_ireland_url=ni_url  # 添加北爱尔兰 URL
+                                    north_ireland_url=ni_url,  # 添加北爱尔兰 URL
+                                    anti_dumping_rate=tariff.get('anti_dumping_rate'),
+                                    countervailing_rate=tariff.get('countervailing_rate')
                                 )
                                 processed_urls.append(commodity_batch[k])
                                 # 记录需要更新北爱尔兰数据的商品

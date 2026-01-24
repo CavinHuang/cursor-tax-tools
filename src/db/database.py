@@ -137,7 +137,10 @@ class TariffDB:
                     url TEXT,
                     north_ireland_rate TEXT,
                     north_ireland_url TEXT,
-                    other_rate TEXT
+                    other_rate TEXT,
+                    anti_dumping_rate TEXT,
+                    countervailing_rate TEXT,
+                    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
                 """)
 
@@ -164,6 +167,26 @@ class TariffDB:
                     else:
                         raise e
 
+                # 检查是否需要添加anti_dumping_rate字段（为了向后兼容旧版本数据库）
+                try:
+                    self.conn.execute("ALTER TABLE tariffs ADD COLUMN anti_dumping_rate TEXT")
+                    logger.info("✅ 成功添加anti_dumping_rate列")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name" in str(e).lower():
+                        logger.debug("ℹ️ anti_dumping_rate列已存在，跳过")
+                    else:
+                        raise e
+
+                # 检查是否需要添加countervailing_rate字段（为了向后兼容旧版本数据库）
+                try:
+                    self.conn.execute("ALTER TABLE tariffs ADD COLUMN countervailing_rate TEXT")
+                    logger.info("✅ 成功添加countervailing_rate列")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name" in str(e).lower():
+                        logger.debug("ℹ️ countervailing_rate列已存在，跳过")
+                    else:
+                        raise e
+
                 # 创建索引
                 self.conn.execute("CREATE INDEX IF NOT EXISTS idx_code ON tariffs(code)")
 
@@ -182,7 +205,8 @@ class TariffDB:
             raise
 
     def add_tariff(self, code: str, description: str, rate: str, url: str = None,
-                   other_rate: str = None, north_ireland_url: str = None):
+                   other_rate: str = None, north_ireland_url: str = None,
+                   anti_dumping_rate: str = None, countervailing_rate: str = None):
         """添加关税记录
 
         Args:
@@ -192,6 +216,8 @@ class TariffDB:
             url: 英国URL（可选，默认自动生成）
             other_rate: 其他税率（可选）
             north_ireland_url: 北爱尔兰URL（可选，默认自动生成）
+            anti_dumping_rate: 反倾销税税率（可选）
+            countervailing_rate: 反补贴税税率（可选）
         """
         if url is None:
             url = f"https://www.trade-tariff.service.gov.uk/commodities/{code}"
@@ -205,13 +231,13 @@ class TariffDB:
                 # 根据是否有 last_updated 列使用不同的插入语句
                 if self._has_last_updated:
                     self.conn.execute(
-                        "INSERT OR REPLACE INTO tariffs (code, description, rate, url, other_rate, north_ireland_url, last_updated) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
-                        (code, description, rate, url, other_rate, north_ireland_url)
+                        "INSERT OR REPLACE INTO tariffs (code, description, rate, url, other_rate, north_ireland_url, anti_dumping_rate, countervailing_rate, last_updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                        (code, description, rate, url, other_rate, north_ireland_url, anti_dumping_rate, countervailing_rate)
                     )
                 else:
                     self.conn.execute(
-                        "INSERT OR REPLACE INTO tariffs (code, description, rate, url, other_rate, north_ireland_url) VALUES (?, ?, ?, ?, ?, ?)",
-                        (code, description, rate, url, other_rate, north_ireland_url)
+                        "INSERT OR REPLACE INTO tariffs (code, description, rate, url, other_rate, north_ireland_url, anti_dumping_rate, countervailing_rate) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (code, description, rate, url, other_rate, north_ireland_url, anti_dumping_rate, countervailing_rate)
                     )
         except Exception as e:
             logger.error(f"添加记录失败: {str(e)}")
@@ -223,7 +249,7 @@ class TariffDB:
             # 根据是否有 last_updated 列使用不同的查询
             if self._has_last_updated:
                 cur = self.conn.execute(
-                    "SELECT code, description, rate, url, north_ireland_rate, north_ireland_url, other_rate, last_updated FROM tariffs WHERE code = ?",
+                    "SELECT code, description, rate, url, north_ireland_rate, north_ireland_url, other_rate, anti_dumping_rate, countervailing_rate, last_updated FROM tariffs WHERE code = ?",
                     (code,)
                 )
                 row = cur.fetchone()
@@ -236,11 +262,13 @@ class TariffDB:
                         'north_ireland_rate': row[4],
                         'north_ireland_url': row[5],
                         'other_rate': row[6],
-                        'last_updated': row[7]
+                        'anti_dumping_rate': row[7],
+                        'countervailing_rate': row[8],
+                        'last_updated': row[9]
                     }
             else:
                 cur = self.conn.execute(
-                    "SELECT code, description, rate, url, north_ireland_rate, north_ireland_url, other_rate FROM tariffs WHERE code = ?",
+                    "SELECT code, description, rate, url, north_ireland_rate, north_ireland_url, other_rate, anti_dumping_rate, countervailing_rate FROM tariffs WHERE code = ?",
                     (code,)
                 )
                 row = cur.fetchone()
@@ -253,6 +281,8 @@ class TariffDB:
                         'north_ireland_rate': row[4],
                         'north_ireland_url': row[5],
                         'other_rate': row[6],
+                        'anti_dumping_rate': row[7],
+                        'countervailing_rate': row[8],
                         'last_updated': None
                     }
             return None
@@ -265,7 +295,7 @@ class TariffDB:
         try:
             # 根据是否有 last_updated 列使用不同的查询
             if self._has_last_updated:
-                cur = self.conn.execute("SELECT code, description, rate, url, north_ireland_url, north_ireland_rate, last_updated FROM tariffs")
+                cur = self.conn.execute("SELECT code, description, rate, url, north_ireland_url, north_ireland_rate, anti_dumping_rate, countervailing_rate, last_updated FROM tariffs")
                 return [
                     {
                         'code': row[0],
@@ -274,12 +304,14 @@ class TariffDB:
                         'url': row[3],
                         'north_ireland_url': row[4],
                         'north_ireland_rate': row[5],
-                        'last_updated': row[6]
+                        'anti_dumping_rate': row[6],
+                        'countervailing_rate': row[7],
+                        'last_updated': row[8]
                     }
                     for row in cur.fetchall()
                 ]
             else:
-                cur = self.conn.execute("SELECT code, description, rate, url, north_ireland_url, north_ireland_rate FROM tariffs")
+                cur = self.conn.execute("SELECT code, description, rate, url, north_ireland_url, north_ireland_rate, anti_dumping_rate, countervailing_rate FROM tariffs")
                 return [
                     {
                         'code': row[0],
@@ -288,6 +320,8 @@ class TariffDB:
                         'url': row[3],
                         'north_ireland_url': row[4],
                         'north_ireland_rate': row[5],
+                        'anti_dumping_rate': row[6],
+                        'countervailing_rate': row[7],
                         'last_updated': None
                     }
                     for row in cur.fetchall()
@@ -374,7 +408,8 @@ class TariffDB:
             raise
 
     def update_tariff(self, code: str, description: str = None, rate: str = None, url: str = None,
-                      north_ireland_rate: str = None, north_ireland_url: str = None, other_rate: str = None):
+                      north_ireland_rate: str = None, north_ireland_url: str = None, other_rate: str = None,
+                      anti_dumping_rate: str = None, countervailing_rate: str = None):
         """更新关税记录（支持部分字段更新）"""
         try:
             # 构建动态更新SQL
@@ -399,6 +434,12 @@ class TariffDB:
             if other_rate is not None:
                 updates.append("other_rate = ?")
                 params.append(other_rate)
+            if anti_dumping_rate is not None:
+                updates.append("anti_dumping_rate = ?")
+                params.append(anti_dumping_rate)
+            if countervailing_rate is not None:
+                updates.append("countervailing_rate = ?")
+                params.append(countervailing_rate)
 
             if not updates:
                 logger.warning("没有提供任何要更新的字段")
