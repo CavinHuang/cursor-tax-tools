@@ -14,11 +14,11 @@ on:
       batch_size:
         description: '批量大小'
         required: false
-        default: '100'  # 减少默认批量大小
+        default: '200'
       delay:
         description: '批次间延迟(秒)'
         required: false
-        default: '0.2'  # 增加延迟
+        default: '0.05'
       update_uk:
         description: '更新英国税率'
         required: false
@@ -26,7 +26,7 @@ on:
       update_ni:
         description: '更新北爱尔兰税率'
         required: false
-        default: 'false'  # 默认关闭北爱尔兰，先更新英国数据
+        default: 'true'
       min_change_threshold:
         description: '最小变更阈值'
         required: false
@@ -34,15 +34,7 @@ on:
       test_mode:
         description: '测试模式（只爬取前3个章节）'
         required: false
-        default: 'true'  # 默认开启测试模式
-      shard_count:
-        description: '分片数量'
-        required: false
-        default: '6'  # 减少并行数
-      concurrent_shards:
-        description: '同时运行的分片数'
-        required: false
-        default: '3'  # 限制并发数
+        default: 'false'
 
   schedule:
     - cron: '0 4 1 * *'  # 每月1日凌晨4点
@@ -53,8 +45,8 @@ permissions:
   pull-requests: read
 
 env:
-  DEFAULT_BATCH_SIZE: 100  # 减少批量大小
-  DEFAULT_DELAY: 0.2        # 增加延迟
+  DEFAULT_BATCH_SIZE: 200
+  DEFAULT_DELAY: 0.05
   MIN_CHANGE_THRESHOLD: 10
 
 jobs:
@@ -107,9 +99,8 @@ jobs:
     - name: 生成任务分配
       id: schedule
       run: |
-        TEST_MODE="${{ github.event.inputs.test_mode || 'true' }}"
+        TEST_MODE="${{ github.event.inputs.test_mode || 'false' }}"
         UPDATE_MODE="${{ github.event.inputs.update_mode || 'full' }}"
-        SHARD_COUNT="${{ github.event.inputs.shard_count || '6' }}"
 
         if [ "$UPDATE_MODE" = "missing_only" ]; then
           echo "INFO: 补齐模式 - 只爬取缺失章节"
@@ -119,13 +110,13 @@ jobs:
             python src/actions/generate_missing_tasks.py \
               --metadata current_metadata.json \
               --output task_assignment.json \
-              --shard-count $SHARD_COUNT
+              --shard-count 15
           else
             echo "WARNING: 没有找到上次元数据，切换为全量模式"
             python src/actions/chapter_scheduler.py \
               --metadata current_metadata.json \
               --output task_assignment.json \
-              --shard-count $SHARD_COUNT
+              --shard-count 15
           fi
         elif [ "$TEST_MODE" = "true" ]; then
           echo "INFO: 测试模式 - 只爬取前3个章节"
@@ -136,7 +127,7 @@ jobs:
           python src/actions/chapter_scheduler.py \
             --metadata current_metadata.json \
             --output task_assignment.json \
-            --shard-count $SHARD_COUNT
+            --shard-count 15
         fi
 
         # 转换为单行JSON供后续步骤使用
@@ -159,9 +150,8 @@ jobs:
 
     strategy:
       fail-fast: false
-      max-parallel: ${{ github.event.inputs.concurrent_shards || 3 }}  # 限制并发数
       matrix:
-        shard: [0, 1, 2, 3, 4, 5]  # 最多6个并行shard
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]  # 15个并行shard
 
     steps:
     - name: 检出代码
@@ -188,8 +178,8 @@ jobs:
       id: scrape_shard
       env:
         SHARD_ID: "shard_${{ matrix.shard }}"
-        INPUT_BATCH_SIZE: ${{ github.event.inputs.batch_size || '100' }}
-        INPUT_DELAY: ${{ github.event.inputs.delay || '0.2' }}
+        INPUT_BATCH_SIZE: ${{ github.event.inputs.batch_size || '200' }}
+        INPUT_DELAY: ${{ github.event.inputs.delay || '0.05' }}
       run: |
         echo "INFO: 开始执行 Shard ${{ matrix.shard }}..."
 
