@@ -82,8 +82,9 @@ class DatabaseMerger:
 
         # 第一步：收集所有分片数据
         print(f"\n📦 第1步：收集所有分片数据...")
-        all_records = {}  # {code: (record, shard_path, quality_score)}
+        all_records = {}  # {code: (record_dict, shard_path, quality_score)}
         total_shard_records = 0
+        all_column_names = set()  # 收集所有列名
 
         for i, shard_path in enumerate(shard_paths):
             if not os.path.exists(shard_path):
@@ -105,6 +106,10 @@ class DatabaseMerger:
                 shard_columns = [row[1] for row in shard_cursor.fetchall()]
                 column_indices = {name: idx for idx, name in enumerate(shard_columns)}
 
+                # 收集所有列名（用于构建最完整的列结构）
+                all_column_names.update(shard_columns)
+                print(f"   📋 分片 {i+1} 列结构 ({len(shard_columns)} 列): {shard_columns}")
+
                 # 获取分片记录数
                 shard_count = shard_cursor.execute(
                     "SELECT COUNT(*) FROM tariffs"
@@ -116,22 +121,25 @@ class DatabaseMerger:
                 shard_cursor.execute(f"SELECT {columns_str} FROM tariffs")
                 records = shard_cursor.fetchall()
 
-                # 分析每条记录的质量并保存
+                # 分析每条记录的质量并保存（转换为字典格式）
                 for record in records:
                     code = record[0]  # code是第一列
                     url = record[column_indices.get('url', 3)] if 'url' in column_indices else ""
+
+                    # 将记录转换为字典，方便后续统一列结构
+                    record_dict = {col: record[idx] for idx, col in enumerate(shard_columns)}
 
                     # 计算数据质量分数
                     quality_score = self._calculate_record_quality(record, column_indices)
 
                     # 智能选择：如果该code已存在，比较质量
                     if code not in all_records:
-                        all_records[code] = (record, shard_path, quality_score)
+                        all_records[code] = (record_dict, shard_path, quality_score)
                     else:
                         # 如果新记录质量更高，替换
                         existing_record, existing_shard, existing_score = all_records[code]
                         if quality_score > existing_score:
-                            all_records[code] = (record, shard_path, quality_score)
+                            all_records[code] = (record_dict, shard_path, quality_score)
 
                 shard_conn.close()
                 self.stats["successful_shards"] += 1
@@ -142,7 +150,21 @@ class DatabaseMerger:
                 self.stats["failed_shards"] += 1
                 continue
 
+        # 构建统一的列顺序（基于主数据库的预期列顺序）
+        canonical_columns = [
+            'code', 'description', 'rate', 'url',
+            'north_ireland_rate', 'north_ireland_url',
+            'other_rate', 'anti_dumping_rate', 'countervailing_rate', 'last_updated'
+        ]
+        # 只保留实际存在的列
+        shard_columns_list = [col for col in canonical_columns if col in all_column_names]
+        # 添加任何不在预期列表中的列
+        for col in all_column_names:
+            if col not in shard_columns_list:
+                shard_columns_list.append(col)
+
         print(f"\n   📊 收集完成：{len(all_records)} 条唯一记录（总分片记录：{total_shard_records}）")
+        print(f"   📊 统一列结构 ({len(shard_columns_list)} 列): {shard_columns_list}")
 
         # 第二步：批量写入主数据库
         print(f"\n💾 第2步：批量写入主数据库...")
@@ -155,24 +177,48 @@ class DatabaseMerger:
         records_to_insert = list(all_records.values())
 
         # 动态构建 INSERT 语句
-        if records_to_insert:
-            # 使用第一条记录确定列结构
-            first_record = records_to_insert[0][0]
-            num_columns = len(first_record)
+        if records_to_insert and shard_columns_list:
+            num_columns = len(shard_columns_list)
             placeholders = ", ".join(["?"] * num_columns)
 
-            # 获取列名（从第一条记录）
+            # 使用统一的列名构建 INSERT 语句
+            columns_str = ", ".join(shard_columns_list)
+
+            # 检查主数据库是否有所有需要的列
             main_cursor.execute("PRAGMA table_info(tariffs)")
             main_columns = [row[1] for row in main_cursor.fetchall()]
-            columns_str = ", ".join(main_columns)
+
+            print(f"   📋 主数据库列结构 ({len(main_columns)} 列): {main_columns}")
+            print(f"   📋 统一列结构 ({len(shard_columns_list)} 列): {shard_columns_list}")
+
+            # 检查主数据库是否缺少某些列，如果缺少则添加
+            missing_columns = set(shard_columns_list) - set(main_columns)
+            if missing_columns:
+                print(f"   ⚠️  主数据库缺少列: {missing_columns}，正在添加...")
+                for col in missing_columns:
+                    try:
+                        main_cursor.execute(f"ALTER TABLE tariffs ADD COLUMN {col} TEXT")
+                        print(f"      ✅ 已添加列: {col}")
+                    except Exception as e:
+                        print(f"      ⚠️  添加列 {col} 失败: {e}")
 
             insert_sql = f"""
                 INSERT OR REPLACE INTO tariffs ({columns_str})
                 VALUES ({placeholders})
             """
 
-            main_cursor.executemany(insert_sql, [r[0] for r in records_to_insert])
+            print(f"   📝 INSERT 语句列数: {num_columns}, 值占位符数: {num_columns}")
+
+            # 将字典格式的记录转换为统一列顺序的元组
+            normalized_records = []
+            for record_dict, shard_path, quality_score in records_to_insert:
+                # 按统一列顺序构建元组，缺失的列填充 None
+                row = tuple(record_dict.get(col, None) for col in shard_columns_list)
+                normalized_records.append(row)
+
+            main_cursor.executemany(insert_sql, normalized_records)
             main_conn.commit()
+            print(f"   ✅ 成功写入 {len(normalized_records)} 条记录")
 
         main_conn.close()
 
