@@ -270,7 +270,9 @@ class DatabaseMerger:
                 url TEXT,
                 north_ireland_rate TEXT,
                 north_ireland_url TEXT,
-                other_rate TEXT
+                other_rate TEXT,
+                anti_dumping_rate TEXT,
+                countervailing_rate TEXT
             )
         """)
 
