@@ -261,7 +261,7 @@ class DatabaseMerger:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
 
-        # 创建 tariffs 表（与 tariff_db.py 保持一致，不含 last_updated）
+        # 创建 tariffs 表（包含所有字段）
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS tariffs (
                 code TEXT PRIMARY KEY,
@@ -272,7 +272,8 @@ class DatabaseMerger:
                 north_ireland_url TEXT,
                 other_rate TEXT,
                 anti_dumping_rate TEXT,
-                countervailing_rate TEXT
+                countervailing_rate TEXT,
+                last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
