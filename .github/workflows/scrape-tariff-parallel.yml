@@ -330,12 +330,30 @@ jobs:
           "https://github.com/$GITHUB_REPOSITORY/releases/download/latest-data/task_assignment.json" || \
           echo '{}' > task_assignment.json
 
+        # 下载上版本 tariffs.db 与 metadata（用于生成 data_changes 变动明细）
+        OLD_DB_ARG=""
+        PREV_VER_ARG=""
+        if curl -s -f -L "https://github.com/$GITHUB_REPOSITORY/releases/download/latest-data/tariffs.db" > previous_tariffs.db 2>/dev/null && [ -s previous_tariffs.db ]; then
+          OLD_DB_ARG="--old-db previous_tariffs.db"
+          PREV_VER=$(curl -s -f "https://github.com/$GITHUB_REPOSITORY/releases/download/latest-data/metadata.json" 2>/dev/null | python -c "import json,sys; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo "")
+          if [ -n "$PREV_VER" ]; then
+            PREV_VER_ARG="--previous-version $PREV_VER"
+          fi
+          echo "INFO: 已下载上版本 db 用于 data_changes（previous=$PREV_VER）"
+        else
+          echo "INFO: 无上版本 db（首次发布），data_changes 全部记为 added"
+        fi
+
         python src/actions/generate_metadata.py \
           tariffs.db \
           "$VERSION" \
           merge_results.json \
           metadata.json \
-          --task-file task_assignment.json
+          --task-file task_assignment.json \
+          $OLD_DB_ARG \
+          $PREV_VER_ARG
+
+        echo "data_changes: $(python -c "import json; print(json.load(open('metadata.json')).get('data_changes',{}).get('summary'))" 2>/dev/null || echo 'N/A')"
 
     - name: 创建更新报告
       run: |
