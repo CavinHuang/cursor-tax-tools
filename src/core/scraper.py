@@ -29,6 +29,51 @@ from src.db.database import TariffDB
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+# NI 未提供时的错误标识（与 fetch_ni_data 约定一致）
+_NI_NOT_PROVIDED = "未提供北爱尔兰URL"
+
+
+def should_delete_code(uk_data, uk_error, ni_data, ni_error):
+    """判定商品编码是否应从数据库删除（已被 trade-tariff 移除/废止）。
+
+    规则：UK 和 NI 都"无效"才删（任一地仍有有效数据则保留）。
+
+    无效的判定：
+    - 干净 HTTP 404：data 为 None 且 error 为 None
+    - 200 但无有效 duty rate：data 是含 code 的 dict，但 rate 为空
+      （trade-tariff 对被移除的编码常返回 200 + 无 duty rate 页面，而非 404）
+
+    保守保留（不算无效）：
+    - 抓取错误：data 为 None 但 error 非 None（超时/网络异常，下次重试）
+    - 空 dict：parse 异常或状态不确定
+
+    Args:
+        uk_data/ni_data: parse_commodity_page 的返回（dict 或 None）
+        uk_error/ni_error: 抓取错误信息（None 表示无错误）
+
+    Returns:
+        bool: True 表示应删除
+    """
+    def _is_invalid(data, error):
+        # NI 未提供（仅 NI 会出现此 error）
+        if error == _NI_NOT_PROVIDED:
+            return True
+        # 干净 404（明确的不存在）
+        if data is None and error is None:
+            return True
+        # 抓取错误 → 不确定，保守保留
+        if data is None:
+            return False
+        # 200 解析结果：有 code 但无有效 duty rate = 已废止
+        if isinstance(data, dict) and data.get('code'):
+            return not (data.get('rate') or '').strip()
+        # 空 dict（parse 异常/跳过）→ 保守保留
+        return False
+
+    return _is_invalid(uk_data, uk_error) and _is_invalid(ni_data, ni_error)
+
+
 class TariffScraper:
     def __init__(self):
         """初始化TariffScraper
@@ -49,11 +94,16 @@ class TariffScraper:
 
     async def scrape_with_retry(self, urls: List[str]) -> List[tuple]:
         """带重试的抓取 - 使用指数退避策略
-        返回: List[tuple], 每个元素是 (status_code, content) 元组
+
+        返回: List[tuple], 每个元素是 (status_code, content) 元组。
+        重试耗尽时返回最后一次的真实结果（可能是 404 或 0=异常），不再统一伪装成 404，
+        以避免把"抓取失败/超时"误判为"商品不存在"而误删有效商品。
         """
+        last_results = None
         for retry in range(self.max_retries):
             try:
                 results = await scrape_urls(urls, headers=self.headers)
+                last_results = results
                 # 检查是否有成功的状态码
                 if any(status == 200 for status, _ in results):
                     return results
@@ -62,8 +112,10 @@ class TariffScraper:
                 # 指数退避：1s, 2s, 4s, 8s, 最大10s
                 backoff_time = min(2 ** retry, 10)
                 await asyncio.sleep(backoff_time)
-        # 返回404状态码的元组
-        return [(404, "") for _ in urls]
+        # 重试耗尽：返回最后真实结果（真 404/其他状态/0=异常），无结果则 0=异常
+        if last_results is not None:
+            return last_results
+        return [(0, None) for _ in urls]
 
     def parse_section_links(self, html: str) -> List[str]:
         """解析主页面获取section链接"""
@@ -616,13 +668,11 @@ class TariffScraper:
             uk_data_parsed, uk_error = uk_result if isinstance(uk_result, tuple) else (None, "英国数据解析异常")
             ni_data_parsed, ni_error = ni_result if isinstance(ni_result, tuple) else (None, "北爱尔兰数据解析异常")
 
-            # 处理404状态 - 只有当两个地区都是404（数据为None且错误也为None）时才删除记录
-            # 修复逻辑：必须同时检查 data is None 和 error is None，避免误删成功抓取的数据
-            uk_is_404 = (uk_data_parsed is None and uk_error is None)
-            ni_is_404_or_not_provided = (ni_data_parsed is None and (ni_error is None or ni_error == "未提供北爱尔兰URL"))
-
-            if uk_is_404 and ni_is_404_or_not_provided:
-                logger.info(f"商品编码 {code} 在所有地区都返回404，删除记录")
+            # 判定是否应删除：干净 404，或 200 但无有效 duty rate
+            # （被 trade-tariff 移除的编码常返回 200 + 无税率页面，而非 404）
+            # 任一地仍有有效数据则保留；抓取错误保守保留（下次重试）
+            if should_delete_code(uk_data_parsed, uk_error, ni_data_parsed, ni_error):
+                logger.info(f"商品编码 {code} 已移除（404 或无有效税率），删除记录")
                 # 先清理error记录（防止循环操作）
                 self.db.clear_scrape_error(code)
                 # 然后删除记录
