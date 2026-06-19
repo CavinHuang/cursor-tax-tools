@@ -175,35 +175,45 @@ jobs:
           echo "ERROR: 数据库文件不存在"
         fi
 
+    - name: 下载上版本数据库（用于 data_changes changelog）
+      id: prev_db
+      run: |
+        PREV_URL="https://github.com/${{ github.repository }}/releases/download/latest-data/tariffs.db"
+        if curl -s -f -L "$PREV_URL" > previous_tariffs.db 2>/dev/null && [ -s previous_tariffs.db ]; then
+          echo "has_previous=true" >> $GITHUB_OUTPUT
+          echo "INFO: 已下载上版本 db 用于 changelog 对比"
+        else
+          echo "has_previous=false" >> $GITHUB_OUTPUT
+          echo "INFO: 无上版本 db（首次发布），本次全部记为 added"
+        fi
+
     - name: 生成元数据
       id: metadata
       if: steps.file_info.outputs.has_database_file == 'true'
       env:
         VERSION: data-${{ github.run_number }}
         GITHUB_REPOSITORY: CavinHuang/cursor-tax-tools
+        HAS_PREVIOUS: ${{ steps.prev_db.outputs.has_previous }}
       run: |
         echo "INFO: 生成元数据..."
-
-        # 执行元数据生成脚本
-        python scripts/actions/generate_metadata.py tariffs.db "$VERSION" update_results.json metadata.json
+        OLD_DB_ARG=""
+        PREV_VER_ARG=""
+        if [ "$HAS_PREVIOUS" = "true" ]; then
+          OLD_DB_ARG="--old-db previous_tariffs.db"
+          PREV_VER=$(python -c "import json; print(json.load(open('current_metadata.json')).get('version',''))" 2>/dev/null || echo "")
+          if [ -n "$PREV_VER" ]; then
+            PREV_VER_ARG="--previous-version $PREV_VER"
+          fi
+        fi
+        python scripts/actions/generate_metadata.py tariffs.db "$VERSION" update_results.json metadata.json $OLD_DB_ARG $PREV_VER_ARG
 
         if [ -f "metadata.json" ]; then
           TOTAL_CHANGES=$(python -c "import json; data=json.load(open('metadata.json')); print(data.get('changes_summary', {}).get('total_updates', 0))")
           echo "total_changes=$TOTAL_CHANGES" >> $GITHUB_OUTPUT
           echo "metadata_generated=true" >> $GITHUB_OUTPUT
-
-          echo "INFO: 变更统计: $TOTAL_CHANGES"
-
-          # 显示元数据摘要
-          VERSION=$(python -c "import json; data=json.load(open('metadata.json')); print(data.get('version', 'N/A'))")
-          RECORD_COUNT=$(python -c "import json; data=json.load(open('metadata.json')); print(data.get('record_count', 0))")
-          FILE_HASH=$(python -c "import json; data=json.load(open('metadata.json')); print(data.get('file_hash', 'N/A')[:20])")
-          echo "INFO: 版本: $VERSION"
-          echo "INFO: 记录数: $RECORD_COUNT"
-          echo "INFO: 文件哈希: $FILE_HASH..."
+          echo "INFO: data_changes: $(python -c "import json; print(json.load(open('metadata.json')).get('data_changes',{}).get('summary'))")"
         else
           echo "metadata_generated=false" >> $GITHUB_OUTPUT
-          echo "ERROR: 元数据生成失败"
         fi
 
     - name: 检查发布条件
