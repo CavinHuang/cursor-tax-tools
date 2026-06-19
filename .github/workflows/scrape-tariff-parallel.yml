@@ -157,6 +157,9 @@ jobs:
     - name: 检出代码
       uses: actions/checkout@v4
 
+    - name: 删除仓库基线 db（每次从最新抓取重建，避免废止编码残留）
+      run: rm -f tariffs.db
+
     - name: 设置Python环境
       uses: actions/setup-python@v5
       with:
@@ -283,8 +286,8 @@ jobs:
           validation_results.json
         retention-days: 7
 
-  # 阶段4: 智能发布
-  publish:
+  # 阶段3.5: 新旧 db diff，生成 data_changes
+  diff_changes:
     needs: [prepare, merge_and_validate]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -305,6 +308,55 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: merged-database
+        path: .
+
+    - name: 对比上版本生成 data_changes
+      run: |
+        REPO="${{ github.repository }}"
+        VERSION="data-${{ needs.prepare.outputs.run_id }}"
+        if curl -s -f -L "https://github.com/$REPO/releases/download/latest-data/tariffs.db" > previous_tariffs.db && [ -s previous_tariffs.db ]; then
+          PREV_VER=$(curl -s -f "https://github.com/$REPO/releases/download/latest-data/metadata.json" | python -c "import json,sys; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo "")
+          python src/actions/generate_changelog.py tariffs.db --old-db previous_tariffs.db --version "$VERSION" --previous-version "$PREV_VER" --output data_changes.json
+          echo "data_changes summary: $(python -c "import json; print(json.load(open('data_changes.json')).get('summary'))")"
+        else
+          python -c "import json; json.dump({'version':'$VERSION','previous_version':None,'summary':{'added':0,'removed':0,'modified':0},'changes':[]}, open('data_changes.json','w'))"
+          echo "首次发布无上版本，data_changes 为空"
+        fi
+
+    - name: 上传 data_changes
+      uses: actions/upload-artifact@v4
+      with:
+        name: data-changes
+        path: data_changes.json
+
+  # 阶段4: 智能发布
+  publish:
+    needs: [prepare, merge_and_validate, diff_changes]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 设置Python环境
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: 安装依赖
+      run: pip install -r requirements.txt
+
+    - name: 下载合并结果
+      uses: actions/download-artifact@v4
+      with:
+        name: merged-database
+        path: .
+
+    - name: 下载 data_changes
+      uses: actions/download-artifact@v4
+      with:
+        name: data-changes
         path: .
 
     - name: 获取文件信息
@@ -330,28 +382,14 @@ jobs:
           "https://github.com/$GITHUB_REPOSITORY/releases/download/latest-data/task_assignment.json" || \
           echo '{}' > task_assignment.json
 
-        # 下载上版本 tariffs.db 与 metadata（用于生成 data_changes 变动明细）
-        OLD_DB_ARG=""
-        PREV_VER_ARG=""
-        if curl -s -f -L "https://github.com/$GITHUB_REPOSITORY/releases/download/latest-data/tariffs.db" > previous_tariffs.db 2>/dev/null && [ -s previous_tariffs.db ]; then
-          OLD_DB_ARG="--old-db previous_tariffs.db"
-          PREV_VER=$(curl -s -f "https://github.com/$GITHUB_REPOSITORY/releases/download/latest-data/metadata.json" 2>/dev/null | python -c "import json,sys; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo "")
-          if [ -n "$PREV_VER" ]; then
-            PREV_VER_ARG="--previous-version $PREV_VER"
-          fi
-          echo "INFO: 已下载上版本 db 用于 data_changes（previous=$PREV_VER）"
-        else
-          echo "INFO: 无上版本 db（首次发布），data_changes 全部记为 added"
-        fi
-
+        # data_changes 由 diff_changes job 预先生成并下发（artifact: data-changes）
         python src/actions/generate_metadata.py \
           tariffs.db \
           "$VERSION" \
           merge_results.json \
           metadata.json \
           --task-file task_assignment.json \
-          $OLD_DB_ARG \
-          $PREV_VER_ARG
+          --data-changes-file data_changes.json
 
         echo "data_changes: $(python -c "import json; print(json.load(open('metadata.json')).get('data_changes',{}).get('summary'))" 2>/dev/null || echo 'N/A')"
 

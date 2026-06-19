@@ -201,7 +201,8 @@ def generate_metadata(db_path: str = 'tariffs.db',
                      output_path: str = 'metadata.json',
                      task_file: str = None,
                      old_db_path: str = None,
-                     previous_version: str = None) -> Dict:
+                     previous_version: str = None,
+                     data_changes_file: str = None) -> Dict:
     """生成数据库元数据"""
 
     # 检查数据库文件是否存在
@@ -230,6 +231,13 @@ def generate_metadata(db_path: str = 'tariffs.db',
 
     # 时间戳
     timestamp = datetime.now(timezone.utc).isoformat()
+
+    # data_changes：优先使用预制文件，否则自动生成
+    if data_changes_file and os.path.exists(data_changes_file):
+        with open(data_changes_file, 'r', encoding='utf-8') as f:
+            data_changes_value = json.load(f)
+    else:
+        data_changes_value = generate_changelog(db_path, old_db_path, version, previous_version)
 
     # 构建元数据
     metadata = {
@@ -292,7 +300,7 @@ def generate_metadata(db_path: str = 'tariffs.db',
             'mirror': []
         },
 
-        'data_changes': generate_changelog(db_path, old_db_path, version, previous_version),
+        'data_changes': data_changes_value,
     }
 
     # 保存元数据
@@ -324,6 +332,7 @@ if __name__ == "__main__":
     parser.add_argument('--task-file', type=str, help='任务分配文件路径')
     parser.add_argument('--old-db', type=str, help='上版本 tariffs.db（用于生成 data_changes）')
     parser.add_argument('--previous-version', type=str, help='上版本号')
+    parser.add_argument('--data-changes-file', type=str, help='预制 data_changes.json（跳过自动生成）')
 
     args = parser.parse_args()
 
@@ -338,6 +347,7 @@ if __name__ == "__main__":
         task_file=args.task_file,
         old_db_path=args.old_db,
         previous_version=args.previous_version,
+        data_changes_file=args.data_changes_file,
     )
 
     if not metadata:
