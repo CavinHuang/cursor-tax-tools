@@ -12,6 +12,13 @@ import sys
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
+# 添加项目根目录到 Python 路径（便于直接脚本执行 + 作为模块导入）
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from src.actions.generate_changelog import generate_changelog
+
 
 def calculate_file_hash(file_path: str, algorithm: str = 'sha256') -> str:
     """计算文件哈希值"""
@@ -192,7 +199,9 @@ def generate_metadata(db_path: str = 'tariffs.db',
                      version: str = None,
                      results_path: str = 'update_results.json',
                      output_path: str = 'metadata.json',
-                     task_file: str = None) -> Dict:
+                     task_file: str = None,
+                     old_db_path: str = None,
+                     previous_version: str = None) -> Dict:
     """生成数据库元数据"""
 
     # 检查数据库文件是否存在
@@ -281,7 +290,9 @@ def generate_metadata(db_path: str = 'tariffs.db',
             'primary': f"https://github.com/{os.getenv('GITHUB_REPOSITORY', 'owner/repo')}/releases/download/latest-data/tariffs.db",
             'metadata': f"https://github.com/{os.getenv('GITHUB_REPOSITORY', 'owner/repo')}/releases/download/latest-data/metadata.json",
             'mirror': []
-        }
+        },
+
+        'data_changes': generate_changelog(db_path, old_db_path, version, previous_version),
     }
 
     # 保存元数据
@@ -311,6 +322,8 @@ if __name__ == "__main__":
     parser.add_argument('results_path', nargs='?', default='merge_results.json', help='合并结果路径')
     parser.add_argument('output_path', nargs='?', default='metadata.json', help='输出路径')
     parser.add_argument('--task-file', type=str, help='任务分配文件路径')
+    parser.add_argument('--old-db', type=str, help='上版本 tariffs.db（用于生成 data_changes）')
+    parser.add_argument('--previous-version', type=str, help='上版本号')
 
     args = parser.parse_args()
 
@@ -322,7 +335,9 @@ if __name__ == "__main__":
         version=version,
         results_path=args.results_path,
         output_path=args.output_path,
-        task_file=args.task_file
+        task_file=args.task_file,
+        old_db_path=args.old_db,
+        previous_version=args.previous_version,
     )
 
     if not metadata:
