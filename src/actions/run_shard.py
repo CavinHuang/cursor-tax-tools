@@ -200,6 +200,8 @@ class ShardExecutor:
         """
         from bs4 import BeautifulSoup
         import logging
+        import re
+        from src.core.scraper import classify_commodity
 
         logger = logging.getLogger(__name__)
         processed_urls = []
@@ -261,37 +263,37 @@ class ShardExecutor:
                     ni_updates = []
 
                     for k, (c_status, c_content) in enumerate(commodity_results):
-                        if c_status == 200 and c_content:
-                            # 解析commodity页面并保存到数据库
-                            tariff = scraper.parse_commodity_page(
-                                c_content,
-                                url=commodity_batch[k]
-                            )
-                            if tariff:
-                                # 生成北爱尔兰 URL
-                                ni_url = f"https://www.trade-tariff.service.gov.uk/xi/commodities/{tariff['code']}"
+                        # 提取请求的 code（删除/保存都需要）
+                        code_match = re.search(r'/commodities/(\d+)', commodity_batch[k])
+                        req_code = code_match.group(1) if code_match else None
+                        # 仅 200 且有内容时才解析，避免对 404/异常页解析
+                        tariff = scraper.parse_commodity_page(
+                            c_content, url=commodity_batch[k]
+                        ) if (c_status == 200 and c_content) else None
+                        action = classify_commodity(c_status, tariff)
 
-                                scraper.db.add_tariff(
-                                    code=tariff['code'],
-                                    description=tariff['description'],
-                                    rate=tariff['rate'],
-                                    url=tariff.get('url'),
-                                    other_rate=tariff.get('other_rate'),
-                                    north_ireland_url=ni_url,  # 添加北爱尔兰 URL
-                                    anti_dumping_rate=tariff.get('anti_dumping_rate'),
-                                    countervailing_rate=tariff.get('countervailing_rate')
-                                )
-                                processed_urls.append(commodity_batch[k])
-                                # 记录需要更新北爱尔兰数据的商品
-                                ni_updates.append(tariff['code'])
-                        elif c_status == 404:
-                            # 404 - 标记删除
-                            import re
-                            code_match = re.search(r'/commodities/(\d+)', commodity_batch[k])
-                            if code_match:
-                                code = code_match.group(1)
-                                scraper.db.delete_tariff(code)
-                                logger.info(f"  Commodity {code} 已删除 (404)")
+                        if action == 'delete':
+                            # 废弃（404 或 200 无税率，如 9403208000 重定向 subheading）→ 删除
+                            if req_code:
+                                scraper.db.delete_tariff(req_code)
+                                logger.info(f"  Commodity {req_code} 已删除 (废弃/404)")
+                        elif action == 'save':
+                            # 有效 → 保存并记录北爱尔兰更新
+                            ni_url = f"https://www.trade-tariff.service.gov.uk/xi/commodities/{tariff['code']}"
+                            scraper.db.add_tariff(
+                                code=tariff['code'],
+                                description=tariff['description'],
+                                rate=tariff['rate'],
+                                url=tariff.get('url'),
+                                other_rate=tariff.get('other_rate'),
+                                north_ireland_url=ni_url,  # 添加北爱尔兰 URL
+                                anti_dumping_rate=tariff.get('anti_dumping_rate'),
+                                countervailing_rate=tariff.get('countervailing_rate')
+                            )
+                            processed_urls.append(commodity_batch[k])
+                            # 记录需要更新北爱尔兰数据的商品
+                            ni_updates.append(tariff['code'])
+                        # action == 'skip'（异常/空 dict）→ 保守不动
 
                     # 6. 批量爬取北爱尔兰数据
                     if ni_updates:

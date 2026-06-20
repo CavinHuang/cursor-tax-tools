@@ -242,8 +242,12 @@ class TariffScraper:
         result = {}
 
         try:
-            # 查找商品编码
-            code_match = re.search(r'/commodities/(\d+)', str(soup))
+            # 查找商品编码：优先用 url 的 code（避免重定向页面 soup 链接 code 错位，
+            # 如 9403208000 重定向到 subheading，soup 里是 9403208020 链接），
+            # fallback 到 soup 提取（兼容无 url 场景）
+            url_code_match = re.search(r'/commodities/(\d+)', url or '')
+            soup_code_match = re.search(r'/commodities/(\d+)', str(soup))
+            code_match = url_code_match or soup_code_match
             if code_match:
                 code = code_match.group(1)
                 # 如果编码已存在，直接返回空
@@ -559,6 +563,8 @@ class TariffScraper:
 
             total_count = self.get_db_count()
             logger.info(f"抓取完成，数据库共有 {total_count} 条记录")
+            # 末尾重试 transient 失败（网络抖动等可恢复失败）
+            await self.retry_transient_failures()
             return []
 
         except Exception as e:
@@ -603,6 +609,57 @@ class TariffScraper:
         # 使用已导入的 TariffDB（无需重复导入）
         db = TariffDB()
         return db.get_record_count()
+
+    async def retry_transient_failures(self, max_retries: int = 3, base_interval: int = 5) -> Dict:
+        """重试 transient 失败的商品编码（抓取流程末尾调用）。
+
+        筛选 failure_type=transient 且 retry_count < max_retries 的 code，重新抓取；
+        成功则清理失败记录，失败则 retry_count++。重试间隔随次数指数退避
+        （比 scrape_with_retry 的 1/2/4s 更长，给目标站点恢复时间）。
+        """
+        errors = self.db.get_scrape_errors()
+        retryable = [e for e in errors
+                     if e.get('failure_type') == 'transient'
+                     and (e.get('retry_count') or 0) < max_retries]
+
+        succeeded = 0
+        failed = 0
+        for err in retryable:
+            code = err['code']
+            retry_count = err.get('retry_count') or 0
+            # 退避间隔（比 scrape_with_retry 更长：base*2^n，上限 60s）
+            await asyncio.sleep(min(base_interval * (2 ** retry_count), 60))
+            url = f"{self.base_url}/commodities/{code}"
+            try:
+                results = await self.scrape_with_retry([url])
+                status, content = results[0]
+                if status == 200 and content:
+                    tariff = self.parse_commodity_page(content, url=url)
+                    if tariff and tariff.get('rate'):
+                        # 用 add_tariff（INSERT OR REPLACE）覆盖更新，
+                        # 避免 save_to_db 因 existing_codes 跳过已存在的失败 code
+                        self.db.add_tariff(
+                            code=tariff['code'],
+                            description=tariff.get('description', ''),
+                            rate=tariff['rate'],
+                            url=tariff.get('url'),
+                            other_rate=tariff.get('other_rate'),
+                        )
+                        self.existing_codes.add(tariff['code'])
+                        self.db.clear_scrape_error(code)
+                        succeeded += 1
+                        continue
+                # 抓取失败或仍无有效税率 → 递增重试计数
+                self.db.increment_retry_count(code)
+                failed += 1
+            except Exception as e:
+                logger.warning(f"重试 {code} 异常: {str(e)}")
+                self.db.increment_retry_count(code)
+                failed += 1
+
+        if retryable:
+            logger.info(f"末尾重试: 共 {len(retryable)} 个, 成功 {succeeded}, 仍失败 {failed}")
+        return {'retried': len(retryable), 'succeeded': succeeded, 'failed': failed}
 
     async def auto_update_single(self, code: str, uk_url: str, ni_url: str = None) -> Dict:
         """自动更新单个商品的税率信息（支持英国和北爱尔兰，独立更新）
@@ -1216,6 +1273,8 @@ class BatchUpdateManager:
             self._update_status(f"批量更新完成！总用时: {total_minutes:.1f}分钟")
             self._update_progress(total_count, total_count, f"更新完成 - 成功: {self.stats['successful']}, 失败: {self.stats['failed']}, 跳过: {self.stats['skipped']}")
 
+            # 末尾重试 transient 失败（网络抖动等可恢复失败）
+            await self.scraper.retry_transient_failures()
             return self.stats
 
         except InterruptedError:

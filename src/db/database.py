@@ -80,6 +80,55 @@ def get_writable_db_path(db_path: str = "tariffs.db") -> str:
     return target_db
 
 
+# 失败类型常量（决定是否重试）
+FAILURE_TRANSIENT = "transient"   # 可重试：network/db
+FAILURE_PERMANENT = "permanent"   # 不重试：not_found/data_missing
+FAILURE_LIMITED = "limited"       # 有限重试：parse/unknown
+
+
+def classify_failure(error_message, status=None, exc_type=None):
+    """分类失败类型，决定是否重试更新。
+
+    信号优先级：status（最强）> exc_type > error_message 关键词。
+    用于 add_scrape_error 写入 failure_type，供末尾重试筛选。
+
+    Args:
+        error_message: 错误描述文本
+        status: HTTP 状态码（404/5xx/0=异常等），可选
+        exc_type: 异常类型（类名或类型对象），可选
+
+    Returns:
+        'transient'(可重试) | 'permanent'(不重试) | 'limited'(有限重试)
+    """
+    msg = (error_message or '').lower()
+
+    # 1. status 信号（最强）
+    if status is not None:
+        if status == 404:
+            return FAILURE_PERMANENT
+        if status == 0 or status >= 500:
+            return FAILURE_TRANSIENT
+
+    # 2. exc_type 信号（超时/连接异常）
+    if exc_type:
+        exc_name = str(exc_type).lower()
+        if 'timeout' in exc_name or 'connection' in exc_name:
+            return FAILURE_TRANSIENT
+
+    # 3. error_message 关键词
+    if '保存失败' in msg or 'database' in msg or 'locked' in msg:
+        return FAILURE_TRANSIENT
+    if '超时' in msg or '连接' in msg or 'timeout' in msg or 'connection' in msg:
+        return FAILURE_TRANSIENT
+    if '未找到' in msg or '不存在' in msg:
+        return FAILURE_PERMANENT
+    if '解析' in msg:
+        return FAILURE_LIMITED
+
+    # 默认保守：有限重试
+    return FAILURE_LIMITED
+
+
 class TariffDB:
     """关税数据库操作类
 
@@ -195,9 +244,22 @@ class TariffDB:
                 CREATE TABLE IF NOT EXISTS scrape_errors (
                     code TEXT PRIMARY KEY,
                     error_message TEXT,
+                    failure_type TEXT,
+                    retry_count INTEGER DEFAULT 0,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
                 """)
+
+                # 向后兼容：为旧库补充 failure_type / retry_count 字段
+                for _col, _decl in [('failure_type', 'TEXT'), ('retry_count', 'INTEGER DEFAULT 0')]:
+                    try:
+                        self.conn.execute(f"ALTER TABLE scrape_errors ADD COLUMN {_col} {_decl}")
+                        logger.info(f"✅ 成功添加 scrape_errors.{_col} 列")
+                    except sqlite3.OperationalError as _e:
+                        if "duplicate column name" in str(_e).lower():
+                            logger.debug(f"ℹ️ scrape_errors.{_col} 列已存在，跳过")
+                        else:
+                            raise _e
 
                 logger.info("✅ 数据库表结构创建完成")
         except Exception as e:
@@ -472,13 +534,32 @@ class TariffDB:
             logger.error(f"删除关税记录失败: {str(e)}")
             raise
 
-    def add_scrape_error(self, code: str, error_message: str):
-        """记录抓取错误"""
+    def add_scrape_error(self, code: str, error_message: str, failure_type: str = None,
+                         status: int = None, exc_type=None):
+        """记录抓取错误，自动分类失败类型。
+
+        Args:
+            code: 商品编码
+            error_message: 错误描述
+            failure_type: 失败类型（transient/permanent/limited）。None 时自动 classify_failure
+            status: HTTP 状态码，传给 classify_failure
+            exc_type: 异常类型，传给 classify_failure
+
+        重复记录（同 code）时保留 retry_count（重试逻辑单独递增）。
+        """
+        if failure_type is None:
+            failure_type = classify_failure(error_message, status=status, exc_type=exc_type)
         try:
             with self.conn:
+                # ON CONFLICT 保留 retry_count，仅更新 message/type/timestamp
                 self.conn.execute(
-                    "INSERT OR REPLACE INTO scrape_errors (code, error_message) VALUES (?, ?)",
-                    (code, error_message)
+                    """INSERT INTO scrape_errors (code, error_message, failure_type, retry_count, timestamp)
+                       VALUES (?, ?, ?, 0, CURRENT_TIMESTAMP)
+                       ON CONFLICT(code) DO UPDATE SET
+                           error_message = excluded.error_message,
+                           failure_type = excluded.failure_type,
+                           timestamp = CURRENT_TIMESTAMP""",
+                    (code, error_message, failure_type)
                 )
         except Exception as e:
             logger.error(f"记录抓取错误失败: {str(e)}")
@@ -489,20 +570,22 @@ class TariffDB:
             if code:
                 # 获取指定编码的错误记录
                 cur = self.conn.execute(
-                    "SELECT code, error_message, timestamp FROM scrape_errors WHERE code = ?",
+                    "SELECT code, error_message, failure_type, retry_count, timestamp FROM scrape_errors WHERE code = ?",
                     (code,)
                 )
             else:
                 # 获取所有错误记录
                 cur = self.conn.execute(
-                    "SELECT code, error_message, timestamp FROM scrape_errors"
+                    "SELECT code, error_message, failure_type, retry_count, timestamp FROM scrape_errors"
                 )
 
             return [
                 {
                     'code': row[0],
                     'error_message': row[1],
-                    'timestamp': row[2]
+                    'failure_type': row[2],
+                    'retry_count': row[3],
+                    'timestamp': row[4]
                 }
                 for row in cur.fetchall()
             ]
@@ -517,3 +600,14 @@ class TariffDB:
                 self.conn.execute("DELETE FROM scrape_errors WHERE code = ?", (code,))
         except Exception as e:
             logger.error(f"清除抓取错误记录失败: {str(e)}")
+
+    def increment_retry_count(self, code: str):
+        """递增失败记录的重试计数（重试仍失败时调用）"""
+        try:
+            with self.conn:
+                self.conn.execute(
+                    "UPDATE scrape_errors SET retry_count = retry_count + 1 WHERE code = ?",
+                    (code,)
+                )
+        except Exception as e:
+            logger.error(f"递增重试计数失败: {str(e)}")
