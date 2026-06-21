@@ -661,6 +661,66 @@ class TariffScraper:
             logger.info(f"末尾重试: 共 {len(retryable)} 个, 成功 {succeeded}, 仍失败 {failed}")
         return {'retried': len(retryable), 'succeeded': succeeded, 'failed': failed}
 
+    async def retry_network_errors(self, codes_with_status, max_retries: int = 3,
+                                   intervals=(30, 60, 120)) -> List[Dict]:
+        """重试网络错误 code（400/500），成功则补全，仍失败返回 failed_codes。
+
+        CI 中抓取返回 400/500 的 code，在任务末尾用更长间隔重试 3 次
+        （30/60/120s，比 scrape_with_retry 的 1/2/4s 更长）。仍失败的写入
+        metadata.failed_codes，供客户端更新后补全。
+
+        Args:
+            codes_with_status: [(code, status), ...] 待重试 code 及首次失败状态码
+            max_retries: 最大重试次数
+            intervals: 每次重试间隔（秒）
+
+        Returns:
+            failed_codes: 仍失败列表，每个 {code, status, error_type, last_attempt, retries}
+        """
+        from datetime import datetime
+
+        pending = list(codes_with_status)  # [(code, first_status)]
+        for attempt in range(max_retries):
+            if not pending:
+                break
+            await asyncio.sleep(intervals[attempt] if attempt < len(intervals) else intervals[-1])
+            still_failed = []
+            for code, first_status in pending:
+                url = f"{self.base_url}/commodities/{code}"
+                try:
+                    results = await self.scrape_with_retry([url])
+                    status, content = results[0]
+                    if status == 200 and content:
+                        tariff = self.parse_commodity_page(content, url=url)
+                        if tariff and tariff.get('rate'):
+                            self.db.add_tariff(
+                                code=tariff['code'], description=tariff.get('description', ''),
+                                rate=tariff['rate'], url=tariff.get('url'),
+                                other_rate=tariff.get('other_rate'),
+                            )
+                            continue  # 补全成功
+                except Exception as e:
+                    logger.warning(f"重试 {code} 异常: {e}")
+                still_failed.append((code, first_status))
+            pending = still_failed
+
+        def _etype(s):
+            if s == 0:
+                return 'network'
+            if 400 <= s < 500:
+                return 'client_error'
+            if s >= 500:
+                return 'server_error'
+            return 'unknown'
+
+        return [{
+            'code': code,
+            'status': status,
+            'error_type': _etype(status),
+            'last_attempt': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'retries': max_retries,
+        } for code, status in pending]
+
     async def auto_update_single(self, code: str, uk_url: str, ni_url: str = None) -> Dict:
         """自动更新单个商品的税率信息（支持英国和北爱尔兰，独立更新）
 
