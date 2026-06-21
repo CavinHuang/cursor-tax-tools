@@ -250,6 +250,12 @@ jobs:
         # 保存合并结果
         cp merge_results.json artifacts/
 
+    - name: 清理僵尸 code（范围盲区修复）
+      continue-on-error: true  # 清理失败不阻断 release
+      run: |
+        echo "INFO: 清理僵尸 code（差集 last_updated 筛选 + 验证删除）..."
+        python src/actions/cleanup_deprecated.py --db tariffs.db --hours 6
+
     - name: 数据库健康检查
       id: health_check
       run: |
