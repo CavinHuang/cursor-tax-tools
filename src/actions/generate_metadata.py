@@ -188,6 +188,35 @@ def analyze_coverage(merge_results: Dict, task_file: str = None) -> Dict:
 
     return coverage_info
 
+def collect_failed_codes(search_dirs=None):
+    """从各 shard_results JSON 汇总 failed_codes（run_shard 末尾重试后仍失败的 code）。
+
+    failed_codes 由 run_shard.retry_network_errors 产出（400/500 重试 3 次仍失败），
+    写入 metadata 供客户端更新后补全。
+
+    Returns:
+        list[dict]: 每个 {code, status, error_type, last_attempt, retries}，按 code 去重
+    """
+    import glob
+    if search_dirs is None:
+        search_dirs = ['.', 'artifacts']
+    failed = []
+    seen = set()
+    for d in search_dirs:
+        for path in glob.glob(f"{d}/**/shard_*_results.json", recursive=True):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                for fc in data.get('failed_codes', []):
+                    code = fc.get('code')
+                    if code and code not in seen:
+                        seen.add(code)
+                        failed.append(fc)
+            except Exception:
+                pass
+    return failed
+
+
 def generate_metadata(db_path: str = 'tariffs.db',
                      version: str = None,
                      results_path: str = 'update_results.json',
@@ -281,7 +310,11 @@ def generate_metadata(db_path: str = 'tariffs.db',
             'primary': f"https://github.com/{os.getenv('GITHUB_REPOSITORY', 'owner/repo')}/releases/download/latest-data/tariffs.db",
             'metadata': f"https://github.com/{os.getenv('GITHUB_REPOSITORY', 'owner/repo')}/releases/download/latest-data/metadata.json",
             'mirror': []
-        }
+        },
+
+        # 网络错误（400/500）重试后仍失败的 code，供客户端更新后补全
+        # 由 merge job 汇总到 merge_results.json，随 artifact 传递（不依赖本 job 的 shard_results）
+        'failed_codes': (update_results or {}).get('failed_codes', [])
     }
 
     # 保存元数据

@@ -250,6 +250,24 @@ jobs:
         # 保存合并结果
         cp merge_results.json artifacts/
 
+    - name: 汇总 failed_codes 到 merge_results
+      continue-on-error: true  # 汇总失败不阻断
+      run: |
+        python -c "
+        import json
+        from src.actions.generate_metadata import collect_failed_codes
+        failed = collect_failed_codes(['artifacts'])
+        try:
+            with open('merge_results.json', 'r', encoding='utf-8') as f: mr = json.load(f)
+        except Exception:
+            mr = {}
+        mr['failed_codes'] = failed
+        with open('merge_results.json', 'w', encoding='utf-8') as f: json.dump(mr, f, indent=2, ensure_ascii=False)
+        print(f'INFO: 汇总 {len(failed)} 个 failed_codes 到 merge_results')
+        "
+        # 同步更新 artifacts 副本（merged-database artifact 会带上）
+        cp merge_results.json artifacts/
+
     - name: 清理僵尸 code（范围盲区修复）
       continue-on-error: true  # 清理失败不阻断 release
       run: |

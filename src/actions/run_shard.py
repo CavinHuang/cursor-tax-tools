@@ -50,6 +50,7 @@ class ShardExecutor:
         self.output_db = output_db or f"tariffs_{shard_id}.db"
 
         self.monitor = ProgressMonitor()
+        self.network_errors = []  # 累积网络错误 code（400/500），末尾重试
         self.shard_db = None  # 保存数据库引用以便后续关闭
         self.results = {
             "shard_id": shard_id,
@@ -159,6 +160,17 @@ class ShardExecutor:
                 self.results["status"] = "partial"
             else:
                 self.results["status"] = "success"
+
+            # 末尾重试网络错误 code（400/500），仍失败的记入 failed_codes 供客户端补全
+            self.results["failed_codes"] = []
+            if self.network_errors:
+                print(f"\n🔄 末尾重试 {len(self.network_errors)} 个网络错误 code...")
+                try:
+                    self.results["failed_codes"] = await scraper.retry_network_errors(self.network_errors)
+                    if self.results["failed_codes"]:
+                        print(f"   ⚠️ 仍有 {len(self.results['failed_codes'])} 个失败（记入 failed_codes 供客户端补全）")
+                except Exception as re:
+                    print(f"⚠️ 末尾重试失败: {re}")
 
         except Exception as e:
             print(f"\n❌ Shard 执行失败: {e}")
@@ -293,7 +305,10 @@ class ShardExecutor:
                             processed_urls.append(commodity_batch[k])
                             # 记录需要更新北爱尔兰数据的商品
                             ni_updates.append(tariff['code'])
-                        # action == 'skip'（异常/空 dict）→ 保守不动
+                        else:  # action == 'skip'
+                            # 网络错误（400/500/0 等非200非404）→ 记录待末尾重试
+                            if req_code and c_status != 200 and c_status != 404:
+                                self.network_errors.append((req_code, c_status))
 
                     # 6. 批量爬取北爱尔兰数据
                     if ni_updates:
